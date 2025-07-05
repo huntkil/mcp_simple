@@ -1,193 +1,684 @@
-# MCP Simple 프로젝트 전체 정리 (업데이트됨)
+# MCP Simple - Technical Documentation
 
-## 프로젝트 개요
+## 📋 Table of Contents
 
-이 프로젝트는 MCP(Model Context Protocol) 서버로, **Obsidian 노트 관리**와 **Google Calendar 연동**을 제공하는 Node.js/TypeScript 애플리케이션입니다.
+1. [Project Overview](#project-overview)
+2. [Architecture](#architecture)
+3. [Core Components](#core-components)
+4. [API Reference](#api-reference)
+5. [Implementation Details](#implementation-details)
+6. [Configuration](#configuration)
+7. [Development Guide](#development-guide)
+8. [Testing](#testing)
+9. [Deployment](#deployment)
+10. [Troubleshooting](#troubleshooting)
 
----
+## 🎯 Project Overview
 
-## 주요 기능
+MCP Simple is a comprehensive Node.js/TypeScript server that integrates Obsidian note management with Google Calendar, featuring AI-powered smart scheduling capabilities. The project implements the Model Context Protocol (MCP) for seamless integration with AI development environments.
 
-### 1. Obsidian 연동
-- 노트 스캔 및 파싱
-- 실시간 파일 감시
-- 검색 및 필터링
-- 노트 CRUD 작업
+### Key Features
 
-### 2. Google Calendar 연동
-- OAuth2 인증
-- 이벤트 생성/조회/수정/삭제
-- 토큰 영속화
+- **Obsidian Integration**: Full CRUD operations for markdown notes
+- **Google Calendar Sync**: OAuth2-based calendar management
+- **Bidirectional Sync**: Convert between notes and calendar events
+- **AI-Powered Smart Features**: Classification, conflict detection, recommendations
+- **Real-time File Watching**: Automatic vault monitoring
+- **MCP Protocol Support**: JSON-RPC communication
 
----
+## 🏗 Architecture
 
-## 기술 스택
-
-- **Backend**: Node.js, TypeScript, Express
-- **Database**: 파일 기반 (JSON)
-- **Authentication**: Google OAuth2
-- **File Watching**: Chokidar
-- **Logging**: Winston
-
----
-
-## 프로젝트 구조
+### System Architecture
 
 ```
-mcp_simple/
-├── config/
-│   ├── server-config.json
-│   └── credentials/
-│       ├── google-calendar.json
-│       └── google-calendar-tokens.json
-├── src/
-│   ├── connectors/
-│   │   ├── obsidian-connector.ts
-│   │   └── google-calendar-connector.ts
-│   ├── server/
-│   │   ├── mcp-server.ts
-│   │   ├── google-calendar-demo.ts
-│   │   ├── message-handler.ts
-│   │   └── protocol-handler.ts
-│   ├── services/
-│   │   ├── ai-service.ts
-│   │   └── search-service.ts
-│   ├── types/
-│   │   ├── mcp-types.ts
-│   │   ├── obsidian-types.ts
-│   │   └── google-calendar-types.ts
-│   └── utils/
-│       ├── logger.ts
-│       ├── file-watcher.ts
-│       └── markdown-parser.ts
-├── package.json
-└── tsconfig.json
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   MCP Client    │    │   Web Browser   │    │   Mobile App    │
+│   (Cursor AI)   │    │                 │    │                 │
+└─────────┬───────┘    └─────────┬───────┘    └─────────┬───────┘
+          │                      │                      │
+          └──────────────────────┼──────────────────────┘
+                                 │
+                    ┌─────────────▼─────────────┐
+                    │    MCP Simple Server      │
+                    │   (Express.js + TypeScript)│
+                    └─────────────┬─────────────┘
+                                  │
+          ┌───────────────────────┼───────────────────────┐
+          │                       │                       │
+┌─────────▼─────────┐  ┌─────────▼─────────┐  ┌─────────▼─────────┐
+│  Obsidian Vault   │  │ Google Calendar   │  │   File System     │
+│   (Local Files)   │  │     (OAuth2)      │  │   (Config/Logs)   │
+└───────────────────┘  └───────────────────┘  └───────────────────┘
 ```
 
----
+### Component Architecture
 
-## 설정 파일
+```
+src/
+├── server/                    # Server layer
+│   ├── mcp-server.ts         # Main Express server
+│   ├── protocol-handler.ts   # MCP protocol implementation
+│   ├── message-handler.ts    # Message routing
+│   └── google-calendar-demo.ts # REST API endpoints
+├── connectors/               # External service connectors
+│   ├── obsidian-connector.ts # Obsidian vault integration
+│   └── google-calendar-connector.ts # Google Calendar API
+├── services/                 # Business logic layer
+│   ├── ai-service.ts         # AI/ML functionality
+│   ├── search-service.ts     # Search and indexing
+│   └── smart-features-service.ts # Smart scheduling features
+├── types/                    # TypeScript type definitions
+│   ├── mcp-types.ts         # MCP protocol types
+│   ├── obsidian-types.ts    # Obsidian data types
+│   └── google-calendar-types.ts # Calendar API types
+└── utils/                    # Utility functions
+    ├── file-watcher.ts      # File system monitoring
+    ├── markdown-parser.ts   # Markdown processing
+    └── logger.ts            # Logging utilities
+```
 
-### server-config.json
-```json
-{
-  "server": {
-    "port": 8000,
-    "host": "localhost",
-    "logLevel": "info"
-  },
-  "obsidian": {
-    "vaultPath": "C:\\Users\\huntk\\Documents\\ObsidianVault",
-    "watchForChanges": true
-  },
-  "googleCalendar": {
-    "clientId": "FROM_CREDENTIALS_FILE",
-    "clientSecret": "FROM_CREDENTIALS_FILE",
-    "redirectUri": "FROM_CREDENTIALS_FILE"
+## 🔧 Core Components
+
+### 1. MCP Server (`src/server/mcp-server.ts`)
+
+**Purpose**: Main Express server that handles HTTP requests and MCP protocol communication.
+
+**Key Features**:
+- Express.js server setup with middleware
+- MCP protocol endpoint (`/mcp`)
+- REST API endpoints for Google Calendar
+- Health check endpoint
+- CORS configuration
+- Error handling middleware
+
+**Implementation**:
+```typescript
+const app = express();
+app.use(express.json());
+app.use(cors());
+
+// MCP Protocol endpoint
+app.post('/mcp', async (req, res) => {
+  const response = await handleMCPMessage(req.body);
+  res.json(response);
+});
+
+// REST API endpoints
+app.use('/api/calendar', calendarRouter);
+```
+
+### 2. Protocol Handler (`src/server/protocol-handler.ts`)
+
+**Purpose**: Implements MCP protocol methods and business logic.
+
+**Implemented Methods**:
+
+#### Basic MCP Methods
+- `initialize`: Server initialization and capability discovery
+- `shutdown`: Graceful server shutdown
+- `exit`: Process termination
+
+#### Obsidian Methods
+- `get_all_notes`: Retrieve all notes with filtering and sorting
+- `get_recent_notes`: Get recently modified notes
+- `search_notes`: Full-text search with relevance scoring
+- `get_note`: Retrieve specific note by ID
+- `create_note`: Create new note with metadata
+- `update_note`: Update existing note content and metadata
+- `delete_note`: Remove note from vault
+
+#### Calendar Integration Methods
+- `search_calendar_events`: Search events by date range and criteria
+- `calendar_to_note`: Convert calendar event to Obsidian note
+- `note_to_calendar`: Convert note with date/time to calendar event
+- `sync_calendar_note`: Bidirectional synchronization
+
+#### Smart Features Methods
+- `classify_event`: AI-based event categorization
+- `detect_conflicts`: Schedule conflict detection
+- `generate_recommendations`: AI-powered scheduling recommendations
+- `generate_automated_reminders`: Smart reminder generation
+- `generate_productivity_insights`: Analytics and insights
+- `update_smart_features_config`: Configuration management
+- `get_smart_features_config`: Retrieve current settings
+
+### 3. Obsidian Connector (`src/connectors/obsidian-connector.ts`)
+
+**Purpose**: Manages Obsidian vault operations and file system interactions.
+
+**Key Features**:
+- Vault scanning and indexing
+- Real-time file watching
+- Markdown parsing and metadata extraction
+- CRUD operations for notes
+- Tag and frontmatter management
+- Backlink processing
+
+**Implementation**:
+```typescript
+export class ObsidianConnector {
+  private vaultPath: string;
+  private notes: Map<string, ObsidianNote>;
+  private fileWatcher: any;
+
+  async initialize(): Promise<void> {
+    await this.scanVault();
+    this.startFileWatcher();
+  }
+
+  getAllNotes(): ObsidianNote[] {
+    return Array.from(this.notes.values());
+  }
+
+  async createNote(title: string, content: string): Promise<ObsidianNote> {
+    // Implementation for note creation
   }
 }
 ```
 
-### google-calendar.json
+### 4. Google Calendar Connector (`src/connectors/google-calendar-connector.ts`)
+
+**Purpose**: Handles Google Calendar API interactions and OAuth2 authentication.
+
+**Key Features**:
+- OAuth2 authentication flow
+- Token management and refresh
+- Calendar event CRUD operations
+- Calendar list management
+- Error handling and retry logic
+
+**Implementation**:
+```typescript
+export class GoogleCalendarConnector {
+  private oauth2Client: OAuth2Client;
+  private calendar: any;
+
+  constructor(config: GoogleCalendarConfig) {
+    this.oauth2Client = new google.auth.OAuth2(
+      config.clientId,
+      config.clientSecret,
+      config.redirectUri
+    );
+    this.calendar = google.calendar({ version: 'v3', auth: this.oauth2Client });
+  }
+
+  async createEvent(eventData: CalendarEventInput): Promise<CalendarServiceResponse<CalendarEventOutput>> {
+    // Implementation for event creation
+  }
+}
+```
+
+### 5. Smart Features Service (`src/services/smart-features-service.ts`)
+
+**Purpose**: Implements AI-powered scheduling features and analytics.
+
+**Key Features**:
+- Event classification using AI
+- Conflict detection algorithms
+- Recommendation generation
+- Productivity analytics
+- Automated reminder creation
+
+**Implementation**:
+```typescript
+export class SmartFeaturesService {
+  private config: SmartFeaturesConfig;
+
+  async classifyEvent(eventId: string): Promise<EventClassification> {
+    // AI-based event classification
+  }
+
+  async detectConflicts(timeMin: string, timeMax: string): Promise<ConflictDetection> {
+    // Schedule conflict detection
+  }
+
+  async generateRecommendations(timeMin: string, timeMax: string): Promise<AIRecommendation[]> {
+    // AI-powered recommendations
+  }
+}
+```
+
+## 📡 API Reference
+
+### MCP Protocol Endpoints
+
+#### POST `/mcp`
+Main MCP protocol endpoint for all method calls.
+
+**Request Format**:
 ```json
 {
-  "clientId": "[REDACTED]",
-  "clientSecret": "[REDACTED]",
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "method_name",
+  "params": {}
+}
+```
+
+**Response Format**:
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {},
+  "error": null
+}
+```
+
+### REST API Endpoints
+
+#### Health Check
+- **GET** `/health`
+- **Response**: Server status and uptime
+
+#### Google Calendar API
+- **GET** `/api/calendar/status` - Authentication status
+- **GET** `/api/calendar/auth-url` - OAuth authorization URL
+- **GET** `/api/calendar/today` - Today's events
+- **POST** `/api/calendar/events/create` - Create event
+- **PUT** `/api/calendar/events/:id` - Update event
+- **DELETE** `/api/calendar/events/:id` - Delete event
+
+## 🔧 Implementation Details
+
+### Authentication Flow
+
+1. **OAuth2 Setup**:
+   ```typescript
+   const oauth2Client = new google.auth.OAuth2(
+     config.clientId,
+     config.clientSecret,
+     config.redirectUri
+   );
+   ```
+
+2. **Token Management**:
+   ```typescript
+   // Load existing tokens
+   if (fs.existsSync(tokenPath)) {
+     const tokens = JSON.parse(fs.readFileSync(tokenPath, 'utf8'));
+     oauth2Client.setCredentials(tokens);
+   }
+   ```
+
+3. **Token Refresh**:
+   ```typescript
+   async refreshAccessToken(): Promise<CalendarServiceResponse<any>> {
+     const { credentials } = await this.oauth2Client.refreshAccessToken();
+     this.oauth2Client.setCredentials(credentials);
+     return { success: true, data: credentials };
+   }
+   ```
+
+### File Watching Implementation
+
+```typescript
+export class FileWatcher {
+  private watcher: any;
+  private vaultPath: string;
+  private onNoteAdded: (path: string) => void;
+  private onNoteChanged: (path: string) => void;
+  private onNoteDeleted: (path: string) => void;
+
+  startWatching(): void {
+    this.watcher = chokidar.watch(this.vaultPath, {
+      ignored: /(^|[\/\\])\../,
+      persistent: true
+    });
+
+    this.watcher
+      .on('add', this.onNoteAdded)
+      .on('change', this.onNoteChanged)
+      .on('unlink', this.onNoteDeleted);
+  }
+}
+```
+
+### Smart Features Implementation
+
+#### Event Classification
+```typescript
+async classifyEvent(eventId: string): Promise<EventClassification> {
+  const event = await this.getEvent(eventId);
+  
+  // AI-based classification logic
+  const category = this.analyzeEventContent(event.summary, event.description);
+  const priority = this.determinePriority(event);
+  const confidence = this.calculateConfidence(event);
+  
+  return {
+    category,
+    priority,
+    confidence,
+    tags: this.extractTags(event)
+  };
+}
+```
+
+#### Conflict Detection
+```typescript
+async detectConflicts(timeMin: string, timeMax: string): Promise<ConflictDetection> {
+  const events = await this.getEvents({ timeMin, timeMax });
+  const conflicts = this.findTimeOverlaps(events);
+  
+  return {
+    conflictingEvents: conflicts,
+    recommendations: this.generateConflictResolutions(conflicts)
+  };
+}
+```
+
+## ⚙️ Configuration
+
+### Server Configuration (`config/server-config.json`)
+```json
+{
+  "port": 8000,
+  "obsidianVaultPath": "C:/Users/username/Documents/ObsidianVault",
+  "logLevel": "info",
+  "enableFileWatcher": true,
+  "maxFileSize": 10485760,
+  "ignorePatterns": [
+    ".obsidian/**",
+    "*.temp",
+    "*.tmp"
+  ]
+}
+```
+
+### Google Calendar Configuration (`config/credentials/google-calendar.json`)
+```json
+{
+  "clientId": "your-google-client-id",
+  "clientSecret": "your-google-client-secret",
   "redirectUri": "http://localhost:8000/api/calendar/auth/callback"
 }
 ```
 
+### Smart Features Configuration
+```json
+{
+  "enableClassification": true,
+  "enableConflictDetection": true,
+  "enableAIRecommendations": true,
+  "enableAutomatedReminders": true,
+  "enableProductivityInsights": true,
+  "classificationThreshold": 0.7,
+  "conflictDetectionRange": 30,
+  "reminderDefaults": {
+    "preparation": 60,
+    "travel": 30,
+    "followUp": 15
+  }
+}
+```
+
+## 🛠 Development Guide
+
+### Adding New MCP Methods
+
+1. **Define Method Type** (`src/types/mcp-types.ts`):
+   ```typescript
+   export interface NewMethodParams {
+     param1: string;
+     param2: number;
+   }
+   
+   export interface NewMethodResult {
+     success: boolean;
+     data: any;
+   }
+   ```
+
+2. **Implement Handler** (`src/server/protocol-handler.ts`):
+   ```typescript
+   export async function handleNewMethod(params: NewMethodParams): Promise<NewMethodResult> {
+     try {
+       // Implementation logic
+       return {
+         success: true,
+         data: result
+       };
+     } catch (error) {
+       throw createMCPError(-32603, 'Internal error', error);
+     }
+   }
+   ```
+
+3. **Register Method** (`src/server/protocol-handler.ts`):
+   ```typescript
+   registerMethodHandler('new_method', handleNewMethod);
+   ```
+
+### Adding New Connectors
+
+1. **Create Connector Class**:
+   ```typescript
+   export class NewServiceConnector {
+     constructor(config: NewServiceConfig) {
+       // Initialize connection
+     }
+   
+     async connect(): Promise<void> {
+       // Establish connection
+     }
+   
+     async disconnect(): Promise<void> {
+       // Clean up connection
+     }
+   }
+   ```
+
+2. **Add to Server Initialization**:
+   ```typescript
+   const newServiceConnector = new NewServiceConnector(config);
+   await newServiceConnector.connect();
+   ```
+
+### Error Handling
+
+```typescript
+export function createMCPError(code: number, message: string, data?: any): MCPError {
+  return {
+    code,
+    message,
+    data
+  };
+}
+
+// Usage in handlers
+try {
+  // Operation logic
+} catch (error) {
+  throw createMCPError(-32603, 'Internal server error', error);
+}
+```
+
+## 🧪 Testing
+
+### Unit Testing
+```bash
+npm test
+```
+
+### Integration Testing
+```bash
+# Test all features
+.\test-phase3.ps1
+
+# Test specific endpoints
+curl http://localhost:8000/health
+curl http://localhost:8000/api/calendar/status
+```
+
+### Manual Testing
+
+#### Test Note Operations
+```bash
+# Get all notes
+curl -X POST http://localhost:8000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc": "2.0", "id": 1, "method": "get_all_notes", "params": {}}'
+
+# Create note
+curl -X POST http://localhost:8000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc": "2.0", "id": 1, "method": "create_note", "params": {"title": "Test Note", "content": "Test content"}}'
+```
+
+#### Test Calendar Operations
+```bash
+# Create event
+curl -X POST http://localhost:8000/api/calendar/events/create \
+  -H "Content-Type: application/json" \
+  -d '{"summary": "Test Event", "startDateTime": "2024-07-05T10:00:00Z", "endDateTime": "2024-07-05T11:00:00Z"}'
+
+# Get today's events
+curl http://localhost:8000/api/calendar/today
+```
+
+#### Test Smart Features
+```bash
+# Classify event
+curl -X POST http://localhost:8000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc": "2.0", "id": 1, "method": "classify_event", "params": {"eventId": "event-id"}}'
+
+# Detect conflicts
+curl -X POST http://localhost:8000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc": "2.0", "id": 1, "method": "detect_conflicts", "params": {"timeMin": "2024-07-05T00:00:00Z", "timeMax": "2024-07-06T00:00:00Z"}}'
+```
+
+## 🚀 Deployment
+
+### Development Deployment
+```bash
+npm install
+npm run build
+npm start
+```
+
+### Production Deployment
+
+1. **Environment Setup**:
+   ```bash
+   export NODE_ENV=production
+   export PORT=8000
+   export OBSIDIAN_VAULT_PATH=/path/to/vault
+   ```
+
+2. **Process Management**:
+   ```bash
+   # Using PM2
+   npm install -g pm2
+   pm2 start dist/server/mcp-server.js --name mcp-simple
+   pm2 save
+   pm2 startup
+   ```
+
+3. **Reverse Proxy** (Nginx):
+   ```nginx
+   server {
+       listen 80;
+       server_name your-domain.com;
+       
+       location / {
+           proxy_pass http://localhost:8000;
+           proxy_http_version 1.1;
+           proxy_set_header Upgrade $http_upgrade;
+           proxy_set_header Connection 'upgrade';
+           proxy_set_header Host $host;
+           proxy_cache_bypass $http_upgrade;
+       }
+   }
+   ```
+
+### Docker Deployment
+```dockerfile
+FROM node:18-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci --only=production
+
+COPY dist ./dist
+COPY config ./config
+
+EXPOSE 8000
+
+CMD ["node", "dist/server/mcp-server.js"]
+```
+
+## 🔧 Troubleshooting
+
+### Common Issues
+
+#### 1. Google Calendar Authentication Errors
+**Problem**: "No access, refresh token, API key or refresh handler callback is set"
+
+**Solution**:
+- Check if `google-calendar-tokens.json` exists in `config/credentials/`
+- Re-authenticate using OAuth flow
+- Verify client ID and secret in configuration
+
+#### 2. Obsidian Vault Access Issues
+**Problem**: Cannot read Obsidian vault
+
+**Solution**:
+- Verify vault path in `server-config.json`
+- Check file permissions
+- Ensure vault directory exists
+
+#### 3. Port Conflicts
+**Problem**: "EADDRINUSE: address already in use"
+
+**Solution**:
+- Kill existing Node.js processes: `taskkill /F /IM node.exe`
+- Change port in configuration
+- Check for other services using the port
+
+#### 4. File Watching Issues
+**Problem**: File changes not detected
+
+**Solution**:
+- Verify file watcher is enabled in configuration
+- Check file system permissions
+- Restart the server
+
+### Debug Mode
+
+Enable debug logging:
+```json
+{
+  "logLevel": "debug"
+}
+```
+
+### Log Analysis
+
+Logs are stored in structured JSON format:
+```json
+{
+  "level": "info",
+  "message": "Server started",
+  "timestamp": "2024-07-05T14:58:12.581Z",
+  "service": "mcp-server"
+}
+```
+
+### Performance Monitoring
+
+Monitor server performance:
+```bash
+# Check memory usage
+node --inspect dist/server/mcp-server.js
+
+# Monitor with PM2
+pm2 monit
+```
+
 ---
 
-## API 엔드포인트
-
-- `POST /mcp` - MCP 프로토콜 메시지 처리
-- `GET /api/calendar/status` - 연동 상태 확인
-- `GET /api/calendar/auth-url` - OAuth 인증 URL 생성
-- `GET /api/calendar/auth/callback` - OAuth 콜백 처리
-- `GET /api/calendar/events/today` - 오늘 일정 조회
-- `POST /api/calendar/create-events` - ClariVein 이벤트 일괄 생성
-- `DELETE /api/calendar/delete-clarivein-events` - ClariVein 이벤트 삭제
-- `GET /health` - 서버 상태 확인
-
----
-
-## 개발 환경 설정
-
-1. 의존성 설치  
-   `npm install`
-2. TypeScript 컴파일  
-   `npm run build`
-3. 서버 실행  
-   `npm start`
-4. 개발 모드  
-   `npm run dev`
-
----
-
-## 주요 업데이트 내역 (2025-07-05 기준)
-
-1. **MongoDB 제거 및 파일 기반 전환**  
-   - MongoDB 관련 코드/설정/의존성 완전 삭제
-2. **Obsidian 연동 개선**  
-   - vault 경로 설정, 샘플 노트 생성, 실시간 감시 활성화
-3. **포트 충돌 해결**  
-   - 포트 8000으로 통일, redirect URI 및 문서 일치
-4. **API 테스트 자동화**  
-   - PowerShell 스크립트로 MCP 메서드 검증
-5. **Google Calendar 연동 구현**  
-   - OAuth2 인증, 토큰 영속화, 오늘 일정 조회 API 추가
-6. **토큰 관리 개선**  
-   - 토큰 파일 자동 저장/로드, 재시작 시 자동 인증
-7. **일정 조회 기능 추가**  
-   - `/api/calendar/events/today`로 오늘 일정 JSON 응답
-
----
-
-## 사용법
-
-- 서버 시작:  
-  `npm run build && npm start`
-- Google Calendar 인증:  
-  `Invoke-RestMethod http://localhost:8000/api/calendar/auth-url`  
-  (브라우저에서 URL 열고 권한 승인)
-- 오늘 일정 조회:  
-  `Invoke-RestMethod http://localhost:8000/api/calendar/events/today`
-- 상태 확인:  
-  `Invoke-RestMethod http://localhost:8000/api/calendar/status`
-- 노트 검색/조회:  
-  `Invoke-RestMethod -Uri "http://localhost:8000/mcp" -Method POST -ContentType "application/json" -Body '{...}'`
-
----
-
-## 문제 해결
-
-- 포트 충돌:  
-  `taskkill /IM node.exe /F`
-- 빌드 오류:  
-  `npm run build`
-- 토큰 만료:  
-  `Remove-Item config/credentials/google-calendar-tokens.json` 후 재인증
-
----
-
-## 향후 개선 사항
-
-- 프론트엔드 UI (React/Vue.js)
-- 데이터베이스 연동 (SQLite/PostgreSQL)
-- 보안 강화 (JWT, HTTPS)
-- 모니터링/배포 (Docker 등)
-
----
-
-## 참고 자료
-
-- [MCP Protocol Documentation](https://modelcontextprotocol.io/)
-- [Google Calendar API](https://developers.google.com/calendar)
-- [Obsidian API](https://obsidian.md/)
-- [Express.js](https://expressjs.com/)
-- [TypeScript](https://www.typescriptlang.org/)
-
----
-
-**마지막 업데이트: 2025-07-05** 
+This documentation provides comprehensive technical details for the MCP Simple project. For usage examples and practical applications, refer to `usecase.md`. 

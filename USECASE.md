@@ -1,574 +1,1070 @@
-# MCP Obsidian Server - 사용 사례 및 예제
+# MCP Simple - Usage Guide & Examples
 
-## 📋 목차
+## 📋 Table of Contents
 
-1. [기본 설정](#기본-설정)
-2. [Obsidian Vault 연동](#obsidian-vault-연동)
-3. [노트 검색 사용법](#노트-검색-사용법)
-4. [실시간 동기화](#실시간-동기화)
-5. [Cursor AI IDE 연동](#cursor-ai-ide-연동)
-6. [실제 사용 시나리오](#실제-사용-시나리오)
+1. [Getting Started](#getting-started)
+2. [Basic Operations](#basic-operations)
+3. [Obsidian Integration](#obsidian-integration)
+4. [Google Calendar Integration](#google-calendar-integration)
+5. [Bidirectional Sync](#bidirectional-sync)
+6. [Smart Features](#smart-features)
+7. [Advanced Usage](#advanced-usage)
+8. [Troubleshooting](#troubleshooting)
+9. [Best Practices](#best-practices)
 
----
+## 🚀 Getting Started
 
-## 🔧 기본 설정
+### Prerequisites
+- Node.js 18+ installed
+- Google Cloud Project with Calendar API enabled
+- Obsidian vault set up
+- PowerShell (for Windows testing)
 
-### 1. 프로젝트 클론 및 설치
+### Initial Setup
 
+1. **Clone and Install**
+   ```bash
+   git clone <repository-url>
+   cd mcp_simple
+   npm install
+   ```
+
+2. **Configure Google Calendar**
+   ```bash
+   # Create Google Cloud Project
+   # Enable Google Calendar API
+   # Create OAuth2 credentials
+   # Save to config/credentials/google-calendar.json
+   ```
+
+3. **Configure Obsidian**
+   ```json
+   // config/server-config.json
+   {
+     "port": 8000,
+     "obsidianVaultPath": "C:/Users/username/Documents/ObsidianVault",
+     "logLevel": "info"
+   }
+   ```
+
+4. **Build and Start**
+   ```bash
+   npm run build
+   npm start
+   ```
+
+5. **Authenticate Google Calendar**
+   ```bash
+   # Get auth URL
+   curl http://localhost:8000/api/calendar/auth-url
+   
+   # Complete OAuth flow in browser
+   # Exchange code for tokens
+   curl "http://localhost:8000/api/calendar/auth/callback?code=YOUR_AUTH_CODE"
+   ```
+
+## 📝 Basic Operations
+
+### Server Health Check
 ```bash
-# 프로젝트 클론
-git clone <repository-url>
-cd mcp-obsidian-server
+# Check server status
+curl http://localhost:8000/health
 
-# 의존성 설치
-npm install
-
-# 개발 모드 실행
-npm run dev
+# Expected response
+{
+  "status": "healthy",
+  "timestamp": "2024-07-05T14:58:12.581Z",
+  "uptime": 123.45
+}
 ```
 
-### 2. 설정 파일 구성
+### MCP Protocol Testing
+```bash
+# Initialize MCP connection
+curl -X POST http://localhost:8000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {}
+  }'
 
-`config/server-config.json` 파일을 수정하세요:
-
-```json
+# Expected response
 {
-  "server": {
-    "port": 4000,
-    "host": "localhost",
-    "logLevel": "info"
-  },
-  "obsidian": {
-    "vaultPath": "/Users/username/Documents/ObsidianVault",
-    "watchForChanges": true,
-    "ignorePatterns": [
-      ".obsidian/**",
-      "*.temp",
-      "*.tmp",
-      "*.log"
-    ],
-    "includeAttachments": false,
-    "maxFileSize": 10485760
-  },
-  "googleCalendar": {
-    "clientId": "FROM_CREDENTIALS_FILE",
-    "clientSecret": "FROM_CREDENTIALS_FILE",
-    "redirectUri": "FROM_CREDENTIALS_FILE",
-    "scopes": [
-      "https://www.googleapis.com/auth/calendar",
-      "https://www.googleapis.com/auth/calendar.events"
-    ],
-    "defaultCalendarName": "ClariVein 회복 훈련",
-    "defaultTrainingTime": "07:00",
-    "defaultLocations": {
-      "gym": "헬스장",
-      "pool": "수영장",
-      "park": "공원",
-      "hospital": "병원"
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "capabilities": {
+      "textDocumentSync": 1,
+      "completionProvider": { ... }
+    },
+    "serverInfo": {
+      "name": "MCP Obsidian Server",
+      "version": "1.0.0"
     }
   }
 }
 ```
 
----
+## 📚 Obsidian Integration
 
-## 📚 Obsidian Vault 연동
+### Note Management
 
-### 1. Vault 구조 예제
-
-```
-MyObsidianVault/
-├── Daily Notes/
-│   ├── 2024-01-15.md
-│   ├── 2024-01-16.md
-│   └── 2024-01-17.md
-├── Projects/
-│   ├── Project A/
-│   │   ├── Overview.md
-│   │   ├── Tasks.md
-│   │   └── Notes.md
-│   └── Project B/
-│       ├── Requirements.md
-│       └── Implementation.md
-├── Knowledge Base/
-│   ├── Programming/
-│   │   ├── TypeScript.md
-│   │   ├── Node.js.md
-│   │   └── Development.md
-│   └── Tools/
-│       ├── Obsidian.md
-│       └── Cursor.md
-└── Templates/
-    ├── Daily Note Template.md
-    └── Project Template.md
-```
-
-### 2. 마크다운 파일 예제
-
-**Daily Notes/2024-01-15.md**
-```markdown
----
-title: Daily Note - 2024-01-15
-tags: [daily, work, meeting]
-created: 2024-01-15T09:00:00Z
----
-
-# Daily Note - 2024-01-15
-
-## Tasks
-- [ ] Review [[Project A/Overview]]
-- [ ] Update [[Knowledge Base/Programming/TypeScript]]
-- [ ] Meeting with team at 2 PM
-
-## Notes
-- Discussed new features for [[Project B]]
-- Need to research development best practices
-- Bookmarked useful resources in [[Tools/Obsidian]]
-
-## Links
-- Related: [[2024-01-14]], [[2024-01-16]]
-- Projects: [[Project A]], [[Project B]]
-```
-
-**Knowledge Base/Programming/TypeScript.md**
-```markdown
----
-title: TypeScript Guide
-tags: [programming, typescript, javascript]
-aliases: [TS, TS Guide]
-created: 2024-01-10T10:00:00Z
----
-
-# TypeScript Guide
-
-## Basic Types
-TypeScript provides several basic types:
-
-```typescript
-let name: string = "John";
-let age: number = 30;
-let isActive: boolean = true;
-```
-
-## Interfaces
-Interfaces define object shapes:
-
-```typescript
-interface User {
-  id: string;
-  name: string;
-  email: string;
-}
-```
-
-## Related Topics
-- [[Node.js]] - Runtime environment
-- [[Tools/Cursor]] - IDE with TypeScript support
-```
-
-### 3. 서버에서 Vault 스캔 확인
-
+#### Get All Notes
 ```bash
-# 서버 로그에서 Vault 스캔 결과 확인
-tail -f logs/combined.log | grep "Vault scan"
-```
-
-예상 출력:
-```
-info: Scanning Obsidian vault...
-info: Vault scan completed. Notes: 25, Attachments: 3, Templates: 2
-```
-
----
-
-## 🔍 노트 검색 사용법
-
-### 1. 기본 검색
-
-```bash
-# Obsidian 노트 검색
-curl -X POST http://localhost:4000/mcp \
+curl -X POST http://localhost:8000/mcp \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
     "id": 1,
-    "method": "search_notes",
+    "method": "get_all_notes",
     "params": {
-      "query": "TypeScript",
-      "limit": 10
+      "limit": 10,
+      "includeContent": false,
+      "sortBy": "modifiedAt",
+      "sortOrder": "desc"
     }
   }'
 ```
 
-### 2. 필터링 검색
-
-```bash
-# 태그별 검색
-curl -X POST http://localhost:4000/mcp \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "search_notes",
-    "params": {
-      "query": "programming",
-      "filters": {
-        "tags": ["typescript", "javascript"]
-      },
-      "limit": 5
-    }
-  }'
-```
-
-### 3. 날짜 범위 검색
-
-```bash
-# 최근 노트 검색
-curl -X POST http://localhost:4000/mcp \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "search_notes",
-    "params": {
-      "query": "meeting",
-      "filters": {
-        "dateRange": {
-          "start": "2024-01-01T00:00:00Z",
-          "end": "2024-01-31T23:59:59Z"
-        }
-      }
-    }
-  }'
-```
-
-### 4. 검색 결과 예제
-
+**Response**:
 ```json
 {
   "jsonrpc": "2.0",
   "id": 1,
   "result": [
     {
-      "type": "obsidian",
-      "id": "L25ldy1wcm9qZWN0L3Byb2plY3QtYS9vdmVydmlldy5tZA==",
-      "title": "TypeScript Guide",
-      "snippet": "TypeScript provides several basic types...",
-      "tags": ["programming", "typescript", "javascript"],
-      "relevance": 15,
-      "source": {
-        "id": "L25ldy1wcm9qZWN0L3Byb2plY3QtYS9vdmVydmlldy5tZA==",
-        "title": "TypeScript Guide",
-        "content": "# TypeScript Guide\n\nTypeScript provides...",
-        "path": "/Users/username/Documents/ObsidianVault/Knowledge Base/Programming/TypeScript.md",
-        "tags": ["programming", "typescript", "javascript"]
-      }
+      "id": "note-1",
+      "title": "Meeting Notes",
+      "fileName": "Meeting Notes.md",
+      "path": "C:/Users/username/Documents/ObsidianVault/Meeting Notes.md",
+      "tags": ["meeting", "work"],
+      "size": 1024,
+      "createdAt": "2024-07-05T10:00:00Z",
+      "modifiedAt": "2024-07-05T14:30:00Z"
     }
   ]
 }
 ```
 
----
-
-## 🔄 실시간 동기화
-
-### 1. 파일 변경 감지
-
-Obsidian에서 노트를 수정하면 자동으로 감지됩니다:
-
+#### Create New Note
 ```bash
-# 로그에서 실시간 변경 감지 확인
-tail -f logs/combined.log | grep "File changed"
-```
-
-예상 출력:
-```
-info: File changed: /Users/username/Documents/ObsidianVault/Daily Notes/2024-01-15.md
-info: Note updated in cache: L25ldy1wcm9qZWN0L3Byb2plY3QtYS9vdmVydmlldy5tZA==
-```
-
-### 2. 새 노트 생성
-
-Obsidian에서 새 노트를 생성하면:
-
-```bash
-# 새 노트 감지 로그
-tail -f logs/combined.log | grep "New note detected"
-```
-
-### 3. 노트 삭제
-
-Obsidian에서 노트를 삭제하면:
-
-```bash
-# 노트 삭제 감지 로그
-tail -f logs/combined.log | grep "Note deleted"
-```
-
----
-
-## 🎯 Cursor AI IDE 연동
-
-### 1. Cursor 설정
-
-Cursor AI IDE에서 MCP 서버를 연결하려면:
-
-1. **Cursor 설정 파일 생성**: `~/.cursor/settings.json`
-
-```json
-{
-  "mcpServers": {
-    "obsidian": {
-      "command": "node",
-      "args": ["/path/to/mcp-obsidian-server/dist/server/mcp-server.js"],
-      "env": {
-        "NODE_ENV": "production"
-      }
-    }
-  }
-}
-```
-
-### 2. Cursor에서 사용 예제
-
-Cursor AI IDE에서 다음과 같이 사용할 수 있습니다:
-
-```
-User: "내 Obsidian 노트에서 TypeScript 관련 내용을 찾아줘"
-
-Cursor AI: MCP 서버를 통해 검색을 실행합니다...
-
-검색 결과:
-1. TypeScript Guide (Knowledge Base/Programming/TypeScript.md)
-   - 기본 타입, 인터페이스, 제네릭 등 설명
-   - 관련 태그: programming, typescript, javascript
-
-2. Node.js with TypeScript (Projects/Project A/Implementation.md)
-   - Node.js와 TypeScript 통합 방법
-   - 관련 태그: nodejs, typescript, backend
-```
-
-### 3. AI 어시스턴트와의 대화
-
-```
-User: "프로젝트 A의 현재 상태를 요약해줘"
-
-Cursor AI: Obsidian 노트를 분석하여 프로젝트 상태를 요약합니다...
-
-프로젝트 A 상태 요약:
-- Overview: 프로젝트 계획 및 목표 정의됨
-- Tasks: 5개 작업 중 3개 완료 (60% 진행률)
-- Notes: 최근 회의에서 새로운 요구사항 추가됨
-- 관련 노트: 2024-01-15 Daily Note에서 언급됨
-```
-
----
-
-## 📖 실제 사용 시나리오
-
-### 시나리오 1: 개발자 지식 관리
-
-**상황**: TypeScript 프로젝트를 진행하는 개발자
-
-**사용법**:
-1. Obsidian에서 개발 노트 작성
-2. MCP 서버가 실시간으로 동기화
-3. Cursor AI에서 코드 관련 노트 검색
-4. AI가 개발자의 노트를 참조하여 코드 제안
-
-**예제**:
-```bash
-# TypeScript 관련 노트 검색
-curl -X POST http://localhost:4000/mcp \
+curl -X POST http://localhost:8000/mcp \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
     "id": 1,
-    "method": "search_notes",
+    "method": "create_note",
     "params": {
-      "query": "interface User",
-      "filters": {
-        "tags": ["typescript", "code"]
+      "title": "Project Planning",
+      "content": "# Project Planning\n\n## Goals\n- Complete Phase 1\n- Start Phase 2\n\n## Timeline\n- Week 1: Research\n- Week 2: Implementation",
+      "tags": ["project", "planning"],
+      "frontmatter": {
+        "status": "in-progress",
+        "priority": "high"
       }
     }
   }'
 ```
 
-### 시나리오 2: 프로젝트 관리
-
-**상황**: 여러 프로젝트를 동시에 진행하는 PM
-
-**사용법**:
-1. 각 프로젝트별 Obsidian 폴더 구성
-2. 일일 노트로 진행 상황 기록
-3. MCP 서버로 프로젝트별 검색
-4. AI가 프로젝트 상태 분석 및 보고서 생성
-
-**예제**:
+#### Search Notes
 ```bash
-# 프로젝트 A 관련 모든 노트 검색
-curl -X POST http://localhost:4000/mcp \
+curl -X POST http://localhost:8000/mcp \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
     "id": 1,
     "method": "search_notes",
     "params": {
-      "query": "Project A",
+      "query": "project planning",
+      "limit": 5,
       "filters": {
+        "tags": ["project"],
         "dateRange": {
-          "start": "2024-01-01T00:00:00Z",
-          "end": "2024-01-31T23:59:59Z"
+          "start": "2024-07-01",
+          "end": "2024-07-31"
         }
       }
     }
   }'
 ```
 
-### 시나리오 3: 연구 및 학습
-
-**상황**: 새로운 기술을 학습하는 연구원
-
-**사용법**:
-1. 학습 내용을 Obsidian에 체계적으로 정리
-2. 태그와 링크로 지식 연결
-3. MCP 서버로 학습 진도 추적
-4. AI가 학습 내용 요약 및 복습 계획 제안
-
-**예제**:
+#### Update Note
 ```bash
-# 개발 학습 노트 검색
-curl -X POST http://localhost:4000/mcp \
+curl -X POST http://localhost:8000/mcp \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
     "id": 1,
-    "method": "search_notes",
+    "method": "update_note",
     "params": {
-      "query": "development patterns",
-      "filters": {
-        "tags": ["development", "learning"]
+      "noteId": "note-1",
+      "content": "# Updated Meeting Notes\n\n## New Agenda\n- Review progress\n- Plan next steps",
+      "tags": ["meeting", "work", "updated"]
+    }
+  }'
+```
+
+#### Delete Note
+```bash
+curl -X POST http://localhost:8000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "delete_note",
+    "params": {
+      "noteId": "note-1"
+    }
+  }'
+```
+
+### Real-time File Watching
+
+The server automatically monitors your Obsidian vault for changes:
+
+```bash
+# Server logs show file changes
+info: New note detected: C:\Users\username\Documents\ObsidianVault\New Note.md
+info: Note updated: C:\Users\username\Documents\ObsidianVault\Updated Note.md
+info: Note deleted: C:\Users\username\Documents\ObsidianVault\Deleted Note.md
+```
+
+## 📅 Google Calendar Integration
+
+### Event Management
+
+#### Create Calendar Event
+```bash
+curl -X POST http://localhost:8000/api/calendar/events/create \
+  -H "Content-Type: application/json" \
+  -d '{
+    "summary": "Team Meeting",
+    "description": "Weekly team sync meeting to discuss project progress",
+    "location": "Conference Room A",
+    "startDateTime": "2024-07-05T10:00:00Z",
+    "endDateTime": "2024-07-05T11:00:00Z",
+    "timeZone": "Asia/Seoul",
+    "calendarId": "primary",
+    "attendees": ["team@company.com"],
+    "reminders": {
+      "useDefault": false,
+      "overrides": [
+        {"method": "email", "minutes": 24 * 60},
+        {"method": "popup", "minutes": 30}
+      ]
+    }
+  }'
+```
+
+**Response**:
+```json
+{
+  "success": true,
+  "data": {
+    "id": "event-id-123",
+    "title": "Team Meeting",
+    "description": "Weekly team sync meeting to discuss project progress",
+    "startDateTime": "2024-07-05T10:00:00Z",
+    "endDateTime": "2024-07-05T11:00:00Z",
+    "location": "Conference Room A",
+    "htmlLink": "https://calendar.google.com/event?eid=...",
+    "status": "confirmed",
+    "created": "2024-07-05T09:00:00Z",
+    "updated": "2024-07-05T09:00:00Z"
+  }
+}
+```
+
+#### Get Today's Events
+```bash
+curl http://localhost:8000/api/calendar/today
+```
+
+**Response**:
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "event-1",
+      "title": "Morning Standup",
+      "startDateTime": "2024-07-05T09:00:00Z",
+      "endDateTime": "2024-07-05T09:30:00Z",
+      "location": "Zoom Meeting"
+    },
+    {
+      "id": "event-2",
+      "title": "Team Meeting",
+      "startDateTime": "2024-07-05T10:00:00Z",
+      "endDateTime": "2024-07-05T11:00:00Z",
+      "location": "Conference Room A"
+    }
+  ]
+}
+```
+
+#### Update Event
+```bash
+curl -X PUT http://localhost:8000/api/calendar/events/event-id-123 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "summary": "Updated Team Meeting",
+    "description": "Updated meeting description",
+    "startDateTime": "2024-07-05T11:00:00Z",
+    "endDateTime": "2024-07-05T12:00:00Z"
+  }'
+```
+
+#### Delete Event
+```bash
+curl -X DELETE http://localhost:8000/api/calendar/events/event-id-123
+```
+
+#### Search Events by Date Range
+```bash
+curl -X POST http://localhost:8000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "search_calendar_events",
+    "params": {
+      "timeMin": "2024-07-01T00:00:00Z",
+      "timeMax": "2024-07-31T23:59:59Z",
+      "query": "meeting",
+      "maxResults": 20,
+      "orderBy": "startTime"
+    }
+  }'
+```
+
+### Calendar Management
+
+#### Get Calendar List
+```bash
+curl -X POST http://localhost:8000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "get_calendar_list",
+    "params": {}
+  }'
+```
+
+#### Create New Calendar
+```bash
+curl -X POST http://localhost:8000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "create_calendar",
+    "params": {
+      "summary": "Work Projects",
+      "description": "Calendar for work-related projects",
+      "timeZone": "Asia/Seoul",
+      "backgroundColor": "#4285f4",
+      "foregroundColor": "#ffffff"
+    }
+  }'
+```
+
+## 🔄 Bidirectional Sync
+
+### Calendar Event to Note
+
+#### Convert Event to Note
+```bash
+curl -X POST http://localhost:8000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "calendar_to_note",
+    "params": {
+      "eventId": "event-id-123",
+      "noteTitle": "Meeting Notes - Team Sync",
+      "includeEventDetails": true,
+      "addTags": ["meeting", "work", "calendar"]
+    }
+  }'
+```
+
+**Generated Note Content**:
+```markdown
+# Meeting Notes - Team Sync
+
+**Event Details:**
+- **Date**: July 5, 2024
+- **Time**: 10:00 AM - 11:00 AM
+- **Location**: Conference Room A
+- **Calendar**: Primary Calendar
+
+**Description:**
+Weekly team sync meeting to discuss project progress
+
+**Tags**: #meeting #work #calendar
+
+---
+
+## Agenda
+[Add your meeting agenda here]
+
+## Notes
+[Add your meeting notes here]
+
+## Action Items
+- [ ] [Add action items here]
+
+## Follow-up
+[Add follow-up items here]
+```
+
+### Note to Calendar Event
+
+#### Convert Note to Event
+```bash
+curl -X POST http://localhost:8000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "note_to_calendar",
+    "params": {
+      "noteId": "note-1",
+      "calendarId": "primary",
+      "parseDateTime": true,
+      "extractLocation": true
+    }
+  }'
+```
+
+**Note Content Example** (with date/time detection):
+```markdown
+# Client Meeting
+
+**Date**: 2024-07-10
+**Time**: 14:00-15:30
+**Location**: Client Office, Downtown
+
+Meeting with client to discuss project requirements and timeline.
+
+## Agenda
+1. Project overview
+2. Requirements discussion
+3. Timeline planning
+4. Next steps
+```
+
+**Generated Event**:
+```json
+{
+  "success": true,
+  "data": {
+    "id": "generated-event-id",
+    "title": "Client Meeting",
+    "description": "Meeting with client to discuss project requirements and timeline.",
+    "startDateTime": "2024-07-10T14:00:00Z",
+    "endDateTime": "2024-07-10T15:30:00Z",
+    "location": "Client Office, Downtown"
+  }
+}
+```
+
+### Bidirectional Synchronization
+
+#### Sync Note with Calendar
+```bash
+curl -X POST http://localhost:8000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "sync_calendar_note",
+    "params": {
+      "noteId": "note-1",
+      "eventId": "event-id-123",
+      "syncDirection": "bidirectional",
+      "updateNote": true,
+      "updateEvent": true
+    }
+  }'
+```
+
+## 🤖 Smart Features
+
+### Event Classification
+
+#### Classify Event
+```bash
+curl -X POST http://localhost:8000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "classify_event",
+    "params": {
+      "eventId": "event-id-123"
+    }
+  }'
+```
+
+**Response**:
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "success": true,
+    "event": {
+      "id": "event-id-123",
+      "title": "Team Meeting",
+      "startDateTime": "2024-07-05T10:00:00Z",
+      "endDateTime": "2024-07-05T11:00:00Z"
+    },
+    "classification": {
+      "category": "meeting",
+      "priority": "medium",
+      "tags": ["team", "sync", "work"],
+      "confidence": 0.85
+    }
+  }
+}
+```
+
+### Conflict Detection
+
+#### Detect Schedule Conflicts
+```bash
+curl -X POST http://localhost:8000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "detect_conflicts",
+    "params": {
+      "timeMin": "2024-07-05T00:00:00Z",
+      "timeMax": "2024-07-06T00:00:00Z",
+      "includeRecommendations": true
+    }
+  }'
+```
+
+**Response**:
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "success": true,
+    "period": {
+      "startDate": "2024-07-05T00:00:00Z",
+      "endDate": "2024-07-06T00:00:00Z"
+    },
+    "totalEvents": 5,
+    "conflictDetection": {
+      "conflictingEvents": [
+        {
+          "event1": {
+            "id": "event-1",
+            "title": "Team Meeting",
+            "start": "2024-07-05T10:00:00Z",
+            "end": "2024-07-05T11:00:00Z"
+          },
+          "event2": {
+            "id": "event-2",
+            "title": "Client Call",
+            "start": "2024-07-05T10:30:00Z",
+            "end": "2024-07-05T11:30:00Z"
+          },
+          "overlapDuration": 30
+        }
+      ],
+      "recommendations": [
+        {
+          "type": "reschedule",
+          "eventId": "event-2",
+          "suggestedTime": "2024-07-05T11:00:00Z",
+          "reason": "Avoid overlap with Team Meeting"
+        }
+      ]
+    }
+  }
+}
+```
+
+### AI Recommendations
+
+#### Generate Scheduling Recommendations
+```bash
+curl -X POST http://localhost:8000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "generate_recommendations",
+    "params": {
+      "timeMin": "2024-07-01T00:00:00Z",
+      "timeMax": "2024-07-31T23:59:59Z",
+      "includeTimeManagement": true,
+      "includeProductivityTips": true
+    }
+  }'
+```
+
+**Response**:
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "success": true,
+    "period": {
+      "startDate": "2024-07-01T00:00:00Z",
+      "endDate": "2024-07-31T23:59:59Z"
+    },
+    "totalEvents": 45,
+    "recommendations": [
+      {
+        "type": "time_management",
+        "title": "Optimize Morning Schedule",
+        "description": "You have 3 meetings scheduled before 10 AM. Consider grouping them or adding breaks.",
+        "priority": "high",
+        "actionable": true,
+        "suggestedActions": [
+          "Move non-urgent meetings to afternoon",
+          "Add 15-minute breaks between meetings",
+          "Prepare agenda items in advance"
+        ]
+      },
+      {
+        "type": "productivity",
+        "title": "Focus Time Allocation",
+        "description": "Only 20% of your time is allocated to focused work. Consider blocking dedicated focus time.",
+        "priority": "medium",
+        "actionable": true,
+        "suggestedActions": [
+          "Block 2-hour focus sessions",
+          "Turn off notifications during focus time",
+          "Schedule focus time in your calendar"
+        ]
+      }
+    ]
+  }
+}
+```
+
+### Automated Reminders
+
+#### Generate Smart Reminders
+```bash
+curl -X POST http://localhost:8000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "generate_automated_reminders",
+    "params": {
+      "eventId": "event-id-123",
+      "includePreparation": true,
+      "includeTravel": true,
+      "includeFollowUp": true
+    }
+  }'
+```
+
+**Response**:
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "success": true,
+    "event": {
+      "id": "event-id-123",
+      "title": "Client Presentation",
+      "startDateTime": "2024-07-05T14:00:00Z",
+      "endDateTime": "2024-07-05T15:00:00Z"
+    },
+    "reminders": [
+      {
+        "type": "preparation",
+        "title": "Prepare Presentation Materials",
+        "time": "2024-07-05T13:00:00Z",
+        "description": "Review and finalize presentation slides"
+      },
+      {
+        "type": "travel",
+        "title": "Leave for Client Office",
+        "time": "2024-07-05T13:30:00Z",
+        "description": "Estimated travel time: 30 minutes"
+      },
+      {
+        "type": "follow_up",
+        "title": "Send Meeting Summary",
+        "time": "2024-07-05T16:00:00Z",
+        "description": "Send meeting notes and action items to client"
+      }
+    ]
+  }
+}
+```
+
+### Productivity Insights
+
+#### Generate Analytics
+```bash
+curl -X POST http://localhost:8000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "generate_productivity_insights",
+    "params": {
+      "timeMin": "2024-07-01T00:00:00Z",
+      "timeMax": "2024-07-31T23:59:59Z",
+      "includeTrends": true,
+      "includeRecommendations": true
+    }
+  }'
+```
+
+**Response**:
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "success": true,
+    "period": {
+      "startDate": "2024-07-01T00:00:00Z",
+      "endDate": "2024-07-31T23:59:59Z"
+    },
+    "insights": {
+      "totalEvents": 45,
+      "workEvents": 35,
+      "personalEvents": 10,
+      "averageEventDuration": 60,
+      "busyDays": [
+        {
+          "date": "2024-07-15",
+          "eventCount": 8,
+          "totalDuration": 480
+        }
+      ],
+      "freeTimeSlots": [
+        {
+          "date": "2024-07-05",
+          "startTime": "2024-07-05T00:00:00Z",
+          "endTime": "2024-07-05T09:00:00Z",
+          "duration": 540
+        }
+      ],
+      "recommendations": [
+        {
+          "type": "time_management",
+          "title": "Optimize Busy Days",
+          "description": "July 15th has 8 events. Consider rescheduling non-urgent items.",
+          "priority": "high",
+          "actionable": true,
+          "suggestedActions": [
+            "Move 2-3 non-critical meetings",
+            "Add buffer time between events",
+            "Prepare materials in advance"
+          ]
+        }
+      ]
+    }
+  }
+}
+```
+
+## 🔧 Advanced Usage
+
+### Smart Features Configuration
+
+#### Get Current Configuration
+```bash
+curl -X POST http://localhost:8000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "get_smart_features_config",
+    "params": {}
+  }'
+```
+
+#### Update Configuration
+```bash
+curl -X POST http://localhost:8000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "update_smart_features_config",
+    "params": {
+      "enableClassification": true,
+      "enableConflictDetection": true,
+      "enableAIRecommendations": true,
+      "classificationThreshold": 0.8,
+      "conflictDetectionRange": 60,
+      "reminderDefaults": {
+        "preparation": 120,
+        "travel": 45,
+        "followUp": 30
       }
     }
   }'
 ```
 
----
+### Batch Operations
 
-## 🛠️ 고급 사용법
-
-### 1. 커스텀 MCP 메서드 추가
-
-새로운 검색 기능을 추가하려면:
-
-```typescript
-// src/server/protocol-handler.ts에 추가
-export async function handleSearchByDate(params: any): Promise<any> {
-  const { startDate, endDate, tags } = params;
-  
-  // 날짜 범위와 태그로 검색
-  const results = await obsidianConnector.searchByDateRange(startDate, endDate, tags);
-  
-  return results;
-}
-
-// 메서드 등록
-registerMethodHandler('search_by_date', handleSearchByDate);
-```
-
-### 2. 백업 및 복구
-
+#### Create Multiple Events
 ```bash
-# Obsidian Vault 백업
-cp -r /path/to/obsidian/vault ./backup-$(date +%Y%m%d)
-
-# 서버 로그 백업
-cp -r logs ./logs-backup-$(date +%Y%m%d)
+# Create multiple events in a loop
+for i in {1..5}; do
+  curl -X POST http://localhost:8000/api/calendar/events/create \
+    -H "Content-Type: application/json" \
+    -d "{
+      \"summary\": \"Meeting $i\",
+      \"startDateTime\": \"2024-07-0${i}T10:00:00Z\",
+      \"endDateTime\": \"2024-07-0${i}T11:00:00Z\"
+    }"
+done
 ```
 
-### 3. 성능 모니터링
-
+#### Bulk Note Operations
 ```bash
-# 서버 성능 확인
-curl -X GET http://localhost:4000/health
-
-# 로그 분석
-grep "search" logs/combined.log | wc -l
-grep "File changed" logs/combined.log | wc -l
-```
-
----
-
-## 🚨 문제 해결
-
-### 1. 연결 문제
-
-**문제**: 서버 연결 실패
-```bash
-# 서버 상태 확인
-curl -X GET http://localhost:4000/health
-
-# 포트 사용 확인
-netstat -an | grep 4000
-```
-
-**해결**: 서버 재시작 및 포트 확인
-
-### 2. 파일 권한 문제
-
-**문제**: Obsidian Vault 접근 권한 오류
-```bash
-# 권한 확인
-ls -la /path/to/obsidian/vault
-
-# 권한 수정
-chmod -R 755 /path/to/obsidian/vault
-```
-
-### 3. 메모리 부족
-
-**문제**: 대용량 Vault로 인한 메모리 부족
-```json
-// config/server-config.json 수정
-{
-  "obsidian": {
-    "maxFileSize": 5242880,  // 5MB로 제한
-    "watchForChanges": false // 파일 감지 비활성화
-  }
-}
-```
-
----
-
-## 📊 모니터링 및 통계
-
-### 1. 서버 상태 확인
-
-```bash
-# 실시간 로그 모니터링
-tail -f logs/combined.log
-
-# 에러 로그 확인
-tail -f logs/error.log
-
-# 서버 통계
-curl -X POST http://localhost:4000/mcp \
+# Get all notes and process them
+curl -X POST http://localhost:8000/mcp \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
     "id": 1,
     "method": "get_all_notes",
-    "params": {}
-  }'
+    "params": {"includeContent": true}
+  }' | jq '.result[] | select(.tags[] | contains("meeting")) | .id'
 ```
 
-### 2. 성능 지표
+### Integration Examples
 
-- **노트 수**: 총 Obsidian 노트 개수
-- **동기화 상태**: 실시간 동기화 상태
-- **검색 성능**: 평균 검색 응답 시간
-- **파일 변경 빈도**: 시간당 감지된 파일 변경 수
+#### PowerShell Script for Daily Check
+```powershell
+# daily-check.ps1
+Write-Host "=== Daily Schedule Check ===" -ForegroundColor Green
+
+# Get today's events
+$events = Invoke-RestMethod -Uri "http://localhost:8000/api/calendar/today"
+Write-Host "Today's Events: $($events.data.Count)" -ForegroundColor Yellow
+
+# Check for conflicts
+$conflicts = Invoke-RestMethod -Uri "http://localhost:8000/mcp" -Method POST -ContentType "application/json" -Body '{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "detect_conflicts",
+  "params": {
+    "timeMin": "' + (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssZ") + '",
+    "timeMax": "' + (Get-Date).AddDays(1).ToString("yyyy-MM-ddTHH:mm:ssZ") + '"
+  }
+}'
+
+if ($conflicts.result.conflictDetection.conflictingEvents.Count -gt 0) {
+    Write-Host "⚠️  Conflicts detected!" -ForegroundColor Red
+    $conflicts.result.conflictDetection.conflictingEvents | ForEach-Object {
+        Write-Host "  - $($_.event1.title) conflicts with $($_.event2.title)" -ForegroundColor Red
+    }
+} else {
+    Write-Host "✅ No conflicts detected" -ForegroundColor Green
+}
+
+# Get productivity insights
+$insights = Invoke-RestMethod -Uri "http://localhost:8000/mcp" -Method POST -ContentType "application/json" -Body '{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "generate_productivity_insights",
+  "params": {
+    "timeMin": "' + (Get-Date).AddDays(-7).ToString("yyyy-MM-ddTHH:mm:ssZ") + '",
+    "timeMax": "' + (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssZ") + '"
+  }
+}'
+
+Write-Host "`n📊 Weekly Insights:" -ForegroundColor Cyan
+Write-Host "  Total Events: $($insights.result.insights.totalEvents)" -ForegroundColor White
+Write-Host "  Work Events: $($insights.result.insights.workEvents)" -ForegroundColor White
+Write-Host "  Personal Events: $($insights.result.insights.personalEvents)" -ForegroundColor White
+```
+
+#### Python Integration Example
+```python
+import requests
+import json
+from datetime import datetime, timedelta
+
+class MCPSimpleClient:
+    def __init__(self, base_url="http://localhost:8000"):
+        self.base_url = base_url
+    
+    def call_mcp(self, method, params=None):
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": method,
+            "params": params or {}
+        }
+        response = requests.post(f"{self.base_url}/mcp", json=payload)
+        return response.json()
+    
+    def get_today_events(self):
+        response = requests.get(f"{self.base_url}/api/calendar/today")
+        return response.json()
+    
+    def create_meeting_note(self, event_id, title):
+        return self.call_mcp("calendar_to_note", {
+            "eventId": event_id,
+            "noteTitle": title,
+            "includeEventDetails": True,
+            "addTags": ["meeting", "auto-generated"]
+        })
+    
+    def analyze_schedule(self, days=7):
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=days)
+        
+        return self.call_mcp("generate_productivity_insights", {
+            "timeMin": start_date.isoformat() + "Z",
+            "timeMax": end_date.isoformat() + "Z"
+        })
+
+# Usage
+client = MCPSimpleClient()
+
+# Get today's schedule
+events = client.get_today_events()
+print(f"Today's events: {len(events['data'])}")
+
+# Create notes for all meetings
+for event in events['data']:
+    if 'meeting' in event['title'].lower():
+        note = client.create_meeting_note(event['id'], f"Notes - {event['title']}")
+        print(f"Created note: {note['result']['note']['title']}")
+
+# Analyze productivity
+insights = client.analyze_schedule()
+print(f"Weekly insights: {insights['result']['insights']['totalEvents']} events")
+```
+
+## 🔧 Troubleshooting
+
+### Common Issues and Solutions
+
+#### 1. Authentication Issues
+**Problem**: "No access, refresh token, API key or refresh handler callback is set"
+
+**Solution**:
+```bash
+# Check if tokens exist
+ls config/credentials/google-calendar-tokens.json
+
+# If not exists, re-authenticate
+curl http://localhost:8000/api/calendar/auth-url
+# Follow OAuth flow in browser
+curl "http://localhost:8000/api/calendar/auth/callback?code=YOUR_CODE"
+```
+
+#### 2. Obsidian Vault Access
+**Problem**: Cannot read Obsidian vault
+
+**Solution**:
+```bash
+# Check vault path
+cat config/server-config.json | jq '.obsidianVaultPath'
+
+# Verify directory exists and has permissions
+ls -la "C:/Users/username/Documents/ObsidianVault"
+
+# Restart server after fixing path
+npm start
+```
+
+#### 3. Port Conflicts
+**Problem**: "EADDRINUSE: address already in use"
+
+**Solution**:
+```bash
+# Kill existing processes
+taskkill /F /IM node.exe
+
+# Or change port in config
+# Edit config/server-config.json: "port": 8001
+```
+
+#### 4. File Watching Issues
+**Problem**: File changes not detected
+
+**Solution**:
+```bash
+# Check file watcher status in logs
+# Look for "File watcher ready" message
+
+# Restart file watcher
+# Restart server: npm start
+```
+
+### Debug Mode
+
+Enable detailed logging:
+```json
+// config/server-config.json
+{
+  "logLevel": "debug"
+}
+```
+
+Check logs for detailed information:
+```bash
+# Monitor logs in real-time
+tail -f logs/combined.log
+
+# Filter for specific errors
+grep "error" logs/combined.log
+```
+
+## 📋 Best Practices
+
+### 1. Note Organization
+- Use consistent naming conventions
+- Add relevant tags to all notes
+- Include frontmatter for metadata
+- Regular backup of your Obsidian vault
+
+### 2. Calendar Management
+- Use descriptive event titles
+- Include detailed descriptions
+- Set appropriate reminders
+- Use calendar colors for categorization
+
+### 3. Smart Features Usage
+- Regularly review AI recommendations
+- Address conflicts promptly
+- Use productivity insights for planning
+- Customize smart features configuration
+
+### 4. Performance Optimization
+- Limit large date ranges in queries
+- Use pagination for large result sets
+- Cache frequently accessed data
+- Monitor server performance
+
+### 5. Security
+- Keep credentials secure
+- Regularly rotate OAuth tokens
+- Use HTTPS in production
+- Monitor access logs
 
 ---
 
-이 가이드를 따라하면 MCP Obsidian Server를 효과적으로 활용할 수 있습니다. 추가 질문이나 문제가 있으면 GitHub Issues에 등록해 주세요! 
+This usage guide provides comprehensive examples and practical scenarios for using MCP Simple. For technical details and implementation information, refer to `project_doc.md`. 

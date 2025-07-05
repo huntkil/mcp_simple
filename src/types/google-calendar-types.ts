@@ -122,6 +122,7 @@ export interface EventSearchFilter {
   query?: string;
   maxResults?: number;
   orderBy?: 'startTime' | 'updated';
+  eventId?: string; // 특정 이벤트 ID로 검색
 }
 
 // 캘린더 생성 요청 타입
@@ -134,5 +135,37 @@ export interface CreateCalendarRequest {
 }
 
 // Google Calendar API 스키마 타입 (런타임에서 사용)
-export type GoogleCalendarEvent = any;
+export interface GoogleCalendarEvent {
+  id?: string;
+  summary?: string;
+  description?: string;
+  start?: {
+    dateTime?: string;
+    date?: string;
+    timeZone?: string;
+  };
+  end?: {
+    dateTime?: string;
+    date?: string;
+    timeZone?: string;
+  };
+  location?: string;
+  htmlLink?: string;
+  status?: string;
+  created?: string;
+  updated?: string;
+  attendees?: Array<{
+    email: string;
+    displayName?: string;
+    responseStatus?: string;
+  }>;
+  reminders?: {
+    useDefault: boolean;
+    overrides?: Array<{
+      method: 'email' | 'popup';
+      minutes: number;
+    }>;
+  };
+}
+
 export type GoogleCalendar = any; 

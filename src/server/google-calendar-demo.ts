@@ -111,6 +111,11 @@ async function makeCalendarAPIRequest(endpoint: string, method: string = 'GET', 
     throw new Error(`Google Calendar API 오류: ${response.status} - ${errorText}`);
   }
 
+  // DELETE 요청의 경우 응답 본문이 없으므로 빈 객체 반환
+  if (method === 'DELETE') {
+    return {};
+  }
+
   return await response.json();
 }
 
@@ -300,6 +305,108 @@ router.get('/events/today', async (req, res) => {
   }
 });
 
+// 일정 범위 검색 API
+router.get('/events/range', async (req, res) => {
+  try {
+    if (!accessToken) {
+      return res.status(401).json({
+        success: false,
+        error: '인증이 필요합니다.',
+        message: '먼저 Google Calendar 인증을 완료하세요.'
+      });
+    }
+
+    // 쿼리 파라미터 파싱
+    const {
+      start = new Date().toISOString().split('T')[0], // 기본값: 오늘
+      end = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 기본값: 7일 후
+      calendarId = 'primary',
+      maxResults = '100',
+      singleEvents = 'true',
+      orderBy = 'startTime',
+      q = '' // 검색어 (선택사항)
+    } = req.query;
+
+    // 날짜 유효성 검사
+    const startDate = new Date(start as string);
+    const endDate = new Date(end as string);
+    
+    if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+      return res.status(400).json({
+        success: false,
+        error: '잘못된 날짜 형식입니다.',
+        message: '날짜는 YYYY-MM-DD 형식으로 입력해주세요.'
+      });
+    }
+
+    if (startDate > endDate) {
+      return res.status(400).json({
+        success: false,
+        error: '시작 날짜가 종료 날짜보다 늦습니다.',
+        message: '시작 날짜는 종료 날짜보다 이전이어야 합니다.'
+      });
+    }
+
+    // 시간 범위 설정 (시작일 00:00:00 ~ 종료일 23:59:59)
+    const timeMin = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate(), 0, 0, 0).toISOString();
+    const timeMax = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate(), 23, 59, 59).toISOString();
+
+    // API 요청 URL 구성
+    const calendarIdStr = calendarId as string;
+    let apiUrl = `/calendars/${encodeURIComponent(calendarIdStr)}/events?timeMin=${timeMin}&timeMax=${timeMax}&singleEvents=${singleEvents as string}&orderBy=${orderBy as string}&maxResults=${maxResults as string}`;
+    
+    // 검색어가 있으면 추가
+    if (q && typeof q === 'string' && q.trim()) {
+      apiUrl += `&q=${encodeURIComponent(q.trim())}`;
+    }
+
+    const eventsResponse = await makeCalendarAPIRequest(apiUrl);
+
+    // 응답 데이터 정리
+    const events = (eventsResponse.items || []).map((event: any) => ({
+      id: event.id,
+      summary: event.summary,
+      description: event.description,
+      location: event.location,
+      start: event.start,
+      end: event.end,
+      attendees: event.attendees,
+      organizer: event.organizer,
+      htmlLink: event.htmlLink,
+      created: event.created,
+      updated: event.updated,
+      status: event.status,
+      recurringEventId: event.recurringEventId,
+      originalStartTime: event.originalStartTime
+    }));
+
+    res.json({
+      success: true,
+      count: events.length,
+      data: events,
+      query: {
+        start: start as string,
+        end: end as string,
+        calendarId: calendarId as string,
+        maxResults: parseInt(maxResults as string),
+        searchQuery: typeof q === 'string' ? q : null
+      },
+      timeRange: {
+        timeMin: timeMin,
+        timeMax: timeMax
+      }
+    });
+
+  } catch (error) {
+    log.error('Failed to fetch events in range', error);
+    res.status(500).json({
+      success: false,
+      error: '일정 범위 검색에 실패했습니다.',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
 // 기존 ClariVein 이벤트 삭제
 router.delete('/delete-clarivein-events', async (req, res) => {
   try {
@@ -457,6 +564,284 @@ router.post('/create-events', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Google Calendar 이벤트 생성에 실패했습니다.',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// 단일 일정 생성 API
+router.post('/events/create', async (req, res) => {
+  try {
+    if (!accessToken) {
+      return res.status(401).json({
+        success: false,
+        error: '인증이 필요합니다.',
+        message: '먼저 Google Calendar 인증을 완료하세요.'
+      });
+    }
+
+    const {
+      summary,
+      description = '',
+      location = '',
+      startDateTime,
+      endDateTime,
+      timeZone = 'Asia/Seoul',
+      calendarId = 'primary',
+      attendees = [],
+      reminders = {
+        useDefault: false,
+        overrides: [
+          { method: 'popup', minutes: 30 },
+          { method: 'email', minutes: 60 }
+        ]
+      }
+    } = req.body;
+
+    // 필수 필드 검증
+    if (!summary || !startDateTime || !endDateTime) {
+      return res.status(400).json({
+        success: false,
+        error: '필수 필드가 누락되었습니다.',
+        message: 'summary, startDateTime, endDateTime은 필수입니다.',
+        required: ['summary', 'startDateTime', 'endDateTime'],
+        received: { summary, startDateTime, endDateTime }
+      });
+    }
+
+    // 날짜 유효성 검사
+    const startDate = new Date(startDateTime);
+    const endDate = new Date(endDateTime);
+    
+    if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+      return res.status(400).json({
+        success: false,
+        error: '잘못된 날짜 형식입니다.',
+        message: 'startDateTime과 endDateTime은 유효한 ISO 8601 형식이어야 합니다.'
+      });
+    }
+
+    if (startDate >= endDate) {
+      return res.status(400).json({
+        success: false,
+        error: '시작 시간이 종료 시간보다 늦거나 같습니다.',
+        message: 'startDateTime은 endDateTime보다 이전이어야 합니다.'
+      });
+    }
+
+    // Google Calendar 이벤트 객체 생성
+    const calendarEvent: any = {
+      summary,
+      description,
+      location,
+      start: {
+        dateTime: startDateTime,
+        timeZone
+      },
+      end: {
+        dateTime: endDateTime,
+        timeZone
+      },
+      reminders
+    };
+
+    // 참석자가 있으면 추가
+    if (attendees && attendees.length > 0) {
+      calendarEvent.attendees = attendees.map((email: string) => ({ email }));
+    }
+
+    // Google Calendar API 호출
+    const result = await makeCalendarAPIRequest(`/calendars/${encodeURIComponent(calendarId)}/events`, 'POST', calendarEvent);
+
+    log.info(`Created single calendar event: ${summary}`);
+
+    res.json({
+      success: true,
+      message: '일정이 성공적으로 생성되었습니다.',
+      data: {
+        eventId: result.id,
+        summary: result.summary,
+        description: result.description,
+        location: result.location,
+        start: result.start,
+        end: result.end,
+        htmlLink: result.htmlLink,
+        created: result.created,
+        updated: result.updated,
+        status: result.status
+      }
+    });
+
+  } catch (error) {
+    log.error('Failed to create single event', error);
+    res.status(500).json({
+      success: false,
+      error: '일정 생성에 실패했습니다.',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// 일정 수정 API
+router.put('/events/update/:eventId', async (req, res) => {
+  try {
+    if (!accessToken) {
+      return res.status(401).json({
+        success: false,
+        error: '인증이 필요합니다.',
+        message: '먼저 Google Calendar 인증을 완료하세요.'
+      });
+    }
+
+    const { eventId } = req.params;
+    const {
+      summary,
+      description,
+      location,
+      startDateTime,
+      endDateTime,
+      timeZone = 'Asia/Seoul',
+      calendarId = 'primary',
+      attendees,
+      reminders
+    } = req.body;
+
+    // 이벤트 ID 검증
+    if (!eventId) {
+      return res.status(400).json({
+        success: false,
+        error: '이벤트 ID가 필요합니다.',
+        message: 'URL 경로에 eventId를 포함해야 합니다.'
+      });
+    }
+
+    // 업데이트할 필드만 포함하는 객체 생성
+    const updateFields: any = {};
+
+    if (summary !== undefined) updateFields.summary = summary;
+    if (description !== undefined) updateFields.description = description;
+    if (location !== undefined) updateFields.location = location;
+    if (startDateTime !== undefined) {
+      updateFields.start = { dateTime: startDateTime, timeZone };
+    }
+    if (endDateTime !== undefined) {
+      updateFields.end = { dateTime: endDateTime, timeZone };
+    }
+    if (attendees !== undefined) updateFields.attendees = attendees;
+    if (reminders !== undefined) updateFields.reminders = reminders;
+
+    // 업데이트할 필드가 없으면 오류
+    if (Object.keys(updateFields).length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: '업데이트할 필드가 없습니다.',
+        message: '최소 하나의 필드를 업데이트해야 합니다.'
+      });
+    }
+
+    // 날짜 유효성 검사 (startDateTime과 endDateTime이 모두 제공된 경우)
+    if (startDateTime && endDateTime) {
+      const startDate = new Date(startDateTime);
+      const endDate = new Date(endDateTime);
+      
+      if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+        return res.status(400).json({
+          success: false,
+          error: '잘못된 날짜 형식입니다.',
+          message: 'startDateTime과 endDateTime은 유효한 ISO 8601 형식이어야 합니다.'
+        });
+      }
+
+      if (startDate >= endDate) {
+        return res.status(400).json({
+          success: false,
+          error: '시작 시간이 종료 시간보다 늦거나 같습니다.',
+          message: 'startDateTime은 endDateTime보다 이전이어야 합니다.'
+        });
+      }
+    }
+
+    // Google Calendar API 호출 (PATCH 메서드 사용)
+    const result = await makeCalendarAPIRequest(
+      `/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`,
+      'PATCH',
+      updateFields
+    );
+
+    log.info(`Updated calendar event: ${result.summary || eventId}`);
+
+    res.json({
+      success: true,
+      message: '일정이 성공적으로 수정되었습니다.',
+      data: {
+        eventId: result.id,
+        summary: result.summary,
+        description: result.description,
+        location: result.location,
+        start: result.start,
+        end: result.end,
+        htmlLink: result.htmlLink,
+        created: result.created,
+        updated: result.updated,
+        status: result.status
+      }
+    });
+
+  } catch (error) {
+    log.error('Failed to update event', error);
+    res.status(500).json({
+      success: false,
+      error: '일정 수정에 실패했습니다.',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// 일정 삭제 API
+router.delete('/events/delete/:eventId', async (req, res) => {
+  try {
+    if (!accessToken) {
+      return res.status(401).json({
+        success: false,
+        error: '인증이 필요합니다.',
+        message: '먼저 Google Calendar 인증을 완료하세요.'
+      });
+    }
+
+    const { eventId } = req.params;
+    const { calendarId = 'primary' } = req.query;
+
+    // 이벤트 ID 검증
+    if (!eventId) {
+      return res.status(400).json({
+        success: false,
+        error: '이벤트 ID가 필요합니다.',
+        message: 'URL 경로에 eventId를 포함해야 합니다.'
+      });
+    }
+
+    // Google Calendar API 호출
+    await makeCalendarAPIRequest(
+      `/calendars/${encodeURIComponent(calendarId as string)}/events/${encodeURIComponent(eventId)}`,
+      'DELETE'
+    );
+
+    log.info(`Deleted calendar event: ${eventId}`);
+
+    res.json({
+      success: true,
+      message: '일정이 성공적으로 삭제되었습니다.',
+      data: {
+        eventId: eventId,
+        deletedAt: new Date().toISOString()
+      }
+    });
+
+  } catch (error) {
+    log.error('Failed to delete event', error);
+    res.status(500).json({
+      success: false,
+      error: '일정 삭제에 실패했습니다.',
       details: error instanceof Error ? error.message : 'Unknown error'
     });
   }
@@ -817,6 +1202,113 @@ router.post('/reset-and-create-events', async (req, res) => {
     res.status(500).json({
       success: false,
       error: '일정 재설정에 실패했습니다.',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// 캘린더 목록 조회 API
+router.get('/calendars', async (req, res) => {
+  try {
+    if (!accessToken) {
+      return res.status(401).json({
+        success: false,
+        error: '인증이 필요합니다.',
+        message: '먼저 Google Calendar 인증을 완료하세요.'
+      });
+    }
+
+    // Google Calendar API 호출
+    const calendarsResponse = await makeCalendarAPIRequest('/users/me/calendarList');
+
+    // 캘린더 정보 정리
+    const calendars = (calendarsResponse.items || []).map((calendar: any) => ({
+      id: calendar.id,
+      summary: calendar.summary,
+      description: calendar.description,
+      location: calendar.location,
+      timeZone: calendar.timeZone,
+      primary: calendar.primary || false,
+      accessRole: calendar.accessRole,
+      backgroundColor: calendar.backgroundColor,
+      foregroundColor: calendar.foregroundColor,
+      selected: calendar.selected,
+      kind: calendar.kind,
+      etag: calendar.etag
+    }));
+
+    // 기본 캘린더를 맨 앞으로 정렬
+    const sortedCalendars = calendars.sort((a: any, b: any) => {
+      if (a.primary && !b.primary) return -1;
+      if (!a.primary && b.primary) return 1;
+      return a.summary.localeCompare(b.summary);
+    });
+
+    res.json({
+      success: true,
+      count: calendars.length,
+      data: sortedCalendars,
+      primaryCalendar: calendars.find((cal: any) => cal.primary) || null
+    });
+
+  } catch (error) {
+    log.error('Failed to fetch calendars', error);
+    res.status(500).json({
+      success: false,
+      error: '캘린더 목록 조회에 실패했습니다.',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// 특정 캘린더 정보 조회 API
+router.get('/calendars/:calendarId', async (req, res) => {
+  try {
+    if (!accessToken) {
+      return res.status(401).json({
+        success: false,
+        error: '인증이 필요합니다.',
+        message: '먼저 Google Calendar 인증을 완료하세요.'
+      });
+    }
+
+    const { calendarId } = req.params;
+
+    // 캘린더 ID 검증
+    if (!calendarId) {
+      return res.status(400).json({
+        success: false,
+        error: '캘린더 ID가 필요합니다.',
+        message: 'URL 경로에 calendarId를 포함해야 합니다.'
+      });
+    }
+
+    // Google Calendar API 호출
+    const calendar = await makeCalendarAPIRequest(`/calendars/${encodeURIComponent(calendarId)}`);
+
+    res.json({
+      success: true,
+      data: {
+        id: calendar.id,
+        summary: calendar.summary,
+        description: calendar.description,
+        location: calendar.location,
+        timeZone: calendar.timeZone,
+        primary: calendar.primary || false,
+        accessRole: calendar.accessRole,
+        backgroundColor: calendar.backgroundColor,
+        foregroundColor: calendar.foregroundColor,
+        kind: calendar.kind,
+        etag: calendar.etag,
+        conferenceProperties: calendar.conferenceProperties
+      }
+    });
+
+  } catch (error) {
+    log.error('Failed to fetch calendar', error);
+    res.status(500).json({
+      success: false,
+      error: '캘린더 정보 조회에 실패했습니다.',
       details: error instanceof Error ? error.message : 'Unknown error'
     });
   }
