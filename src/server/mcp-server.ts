@@ -18,8 +18,7 @@ function loadConfig(): MCPServerConfig {
       port: config.server.port || 4000,
       host: config.server.host || 'localhost',
       logLevel: config.server.logLevel || 'info',
-      obsidianVaultPath: config.obsidian.vaultPath || '',
-      mongoConnectionString: config.mongodb.connectionString || ''
+      obsidianVaultPath: config.obsidian.vaultPath || ''
     };
   } catch (error) {
     log.error('Failed to load config', error);

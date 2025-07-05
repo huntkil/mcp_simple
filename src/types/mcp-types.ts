@@ -36,7 +36,6 @@ export interface MCPServerConfig {
   host: string;
   logLevel: string;
   obsidianVaultPath?: string;
-  mongoConnectionString?: string;
 }
 
 // MCP 메서드 타입
@@ -52,8 +51,6 @@ export enum MCPMethod {
   UPDATE_NOTE = 'update_note',
   CREATE_NOTE = 'create_note',
   DELETE_NOTE = 'delete_note',
-  GET_MONGO_DATA = 'get_mongo_data',
-  UPDATE_MONGO_DATA = 'update_mongo_data',
   GET_RECENT_NOTES = 'get_recent_notes',
   GET_ALL_NOTES = 'get_all_notes',
   
@@ -107,7 +104,7 @@ export interface SearchParams {
       start: Date;
       end: Date;
     };
-    type?: 'note' | 'mongo' | 'both';
+    type?: 'note' | 'both';
   };
 }
 

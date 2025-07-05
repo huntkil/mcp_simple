@@ -1,14 +1,13 @@
-# MCP Obsidian MongoDB Server
+# MCP Obsidian Server
 
-Windows 10 환경에서 Cursor AI IDE와 연동되는 MCP(Model Context Protocol) 서버입니다. 이 서버는 Obsidian 노트와 로컬 MongoDB를 연결하여 지식 관리 시스템을 구축합니다.
+Windows 10 환경에서 Cursor AI IDE와 연동되는 MCP(Model Context Protocol) 서버입니다. 이 서버는 Obsidian 노트와 Google Calendar를 연결하여 지식 관리 시스템을 구축합니다.
 
 ## 🚀 주요 기능
 
 - **MCP 프로토콜 지원**: JSON-RPC 기반 통신으로 Cursor AI IDE와 완벽 연동
 - **Obsidian 연동**: 마크다운 파일 읽기/쓰기, 메타데이터 추출, 실시간 동기화
-- **MongoDB 연동**: CRUD 작업, 검색 최적화, 인덱싱
 - **Google Calendar 연동**: ClariVein 시술 후 체계적인 훈련 일정 자동 생성 및 관리
-- **통합 검색**: Obsidian 노트와 MongoDB 데이터 통합 검색
+- **노트 검색**: Obsidian 노트 전문 검색
 - **실시간 동기화**: 파일 변경 감지 및 자동 동기화
 - **백링크 처리**: Obsidian 위키링크 기반 백링크 자동 생성
 
@@ -16,7 +15,6 @@ Windows 10 환경에서 Cursor AI IDE와 연동되는 MCP(Model Context Protocol
 
 - **언어**: TypeScript/JavaScript (Node.js)
 - **프레임워크**: Express.js
-- **데이터베이스**: MongoDB
 - **외부 API**: Google Calendar API
 - **파일 감지**: Chokidar
 - **마크다운 파싱**: Gray-matter, Remark
@@ -26,7 +24,7 @@ Windows 10 환경에서 Cursor AI IDE와 연동되는 MCP(Model Context Protocol
 ## 📁 프로젝트 구조
 
 ```
-mcp-obsidian-mongo-server/
+mcp-obsidian-server/
 ├── src/
 │   ├── server/                    # MCP 서버 메인 로직
 │   │   ├── mcp-server.ts         # ✅ Express 서버 및 MCP 엔드포인트
@@ -35,16 +33,14 @@ mcp-obsidian-mongo-server/
 │   │   └── calendar-routes.ts    # 🆕 Google Calendar API 라우터
 │   ├── connectors/               # 외부 시스템 연동
 │   │   ├── obsidian-connector.ts # ✅ Obsidian Vault 연동
-│   │   ├── mongo-connector.ts    # ✅ MongoDB 연동
 │   │   └── google-calendar-connector.ts # 🆕 Google Calendar 연동
 │   ├── services/                 # 비즈니스 로직
-│   │   ├── search-service.ts     # ✅ 통합 검색 서비스
+│   │   ├── search-service.ts     # ✅ Obsidian 검색 서비스
 │   │   ├── ai-service.ts         # ✅ AI 서비스
 │   │   └── calendar-training-service.ts # 🆕 훈련 일정 관리 서비스
 │   ├── types/                   # TypeScript 타입 정의
 │   │   ├── mcp-types.ts         # ✅ MCP 프로토콜 타입
 │   │   ├── obsidian-types.ts    # ✅ Obsidian 타입
-│   │   ├── mongo-types.ts       # ✅ MongoDB 타입
 │   │   └── google-calendar-types.ts # 🆕 Google Calendar 타입
 │   └── utils/                   # 유틸리티 함수
 │       ├── file-watcher.ts      # ✅ 파일 변경 감지
@@ -52,7 +48,7 @@ mcp-obsidian-mongo-server/
 │       └── logger.ts            # ✅ 로깅 유틸리티
 ├── config/                      # 설정 파일
 │   ├── server-config.json       # ✅ 서버 설정
-│   └── database-config.json     # ✅ DB 설정
+│   └── credentials/             # 🔐 민감한 정보 (Git 제외)
 ├── logs/                        # 로그 파일 (자동 생성)
 ├── dist/                        # 빌드 결과물 (자동 생성)
 ├── package.json                 # ✅ 의존성 및 스크립트
@@ -96,15 +92,6 @@ npm install
     ],
     "includeAttachments": false,
     "maxFileSize": 10485760
-  },
-  "mongodb": {
-    "connectionString": "mongodb://localhost:27017",
-    "databaseName": "obsidian_mcp",
-    "collections": {
-      "notes": "notes",
-      "metadata": "metadata",
-      "searchIndex": "search_index"
-    }
   },
   "googleCalendar": {
     "clientId": "YOUR_GOOGLE_CLIENT_ID",
@@ -186,14 +173,14 @@ Content-Type: application/json
 - `shutdown`: 서버 종료
 - `exit`: 프로세스 종료
 
-### 커스텀 메서드 (구현 예정)
-- `search_notes`: 통합 노트 검색
+### 커스텀 메서드
+- `search_notes`: 노트 검색
 - `get_note`: 노트 조회
 - `update_note`: 노트 업데이트
 - `create_note`: 노트 생성
 - `delete_note`: 노트 삭제
-- `get_mongo_data`: MongoDB 데이터 조회
-- `update_mongo_data`: MongoDB 데이터 업데이트
+- `get_recent_notes`: 최근 노트 조회
+- `get_all_notes`: 전체 노트 조회
 
 ## 🔍 구현된 기능
 
@@ -205,19 +192,10 @@ Content-Type: application/json
 - **CRUD 작업**: 노트 생성, 읽기, 업데이트, 삭제
 - **검색**: 제목, 태그, 콘텐츠, 메타데이터 기반 검색
 
-### ✅ MongoDB Connector
-- **연결 관리**: 연결 풀 및 재연결 처리
-- **인덱싱**: 텍스트 검색, 태그, 동기화 인덱스
-- **CRUD 작업**: 노트 저장/업데이트/삭제
-- **검색**: 전문 검색 및 하이라이트
-- **집계**: 복잡한 쿼리 및 통계
-- **메타데이터**: 키-값 저장소
-- **통계**: 노트 수, 태그 수, 평균 크기 등
-
 ### ✅ Search Service
-- **하이브리드 검색**: Obsidian + MongoDB 통합 검색
+- **노트 검색**: Obsidian 노트 전문 검색
 - **결과 랭킹**: 관련성 점수 기반 정렬
-- **필터링**: 소스별, 태그별, 날짜별 필터
+- **필터링**: 태그별, 날짜별 필터
 - **스니펫**: 검색 결과 컨텍스트 추출
 
 ### ✅ File Watcher
@@ -306,15 +284,9 @@ curl -X POST http://localhost:4000/api/calendar/training/schedule \
 1. `src/connectors/obsidian-connector.ts` 수정
 2. `src/types/obsidian-types.ts`에 타입 추가
 
-### MongoDB 연동 확장
-
-1. `src/connectors/mongo-connector.ts` 수정
-2. `src/types/mongo-types.ts`에 타입 추가
-
 ## 🚨 주의사항
 
 - **Obsidian Vault 경로**: 설정 파일에서 올바른 Obsidian Vault 경로를 지정해야 합니다
-- **MongoDB 연결**: MongoDB 서버가 실행 중이어야 합니다
 - **파일 권한**: Obsidian Vault 디렉토리에 읽기/쓰기 권한이 필요합니다
 - **메모리 사용량**: 대용량 Vault의 경우 충분한 메모리를 확보하세요
 

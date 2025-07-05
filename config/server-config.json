@@ -20,20 +20,6 @@
     "includeAttachments": false,
     "maxFileSize": 10485760
   },
-  "mongodb": {
-    "connectionString": "FROM_CREDENTIALS_FILE",
-    "databaseName": "FROM_CREDENTIALS_FILE",
-    "collections": {
-      "notes": "notes",
-      "metadata": "metadata",
-      "searchIndex": "search_index"
-    },
-    "options": {
-      "maxPoolSize": 10,
-      "serverSelectionTimeoutMS": 5000,
-      "socketTimeoutMS": 45000
-    }
-  },
   "search": {
     "defaultLimit": 20,
     "maxLimit": 100,

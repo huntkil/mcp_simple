@@ -1,7 +1,7 @@
 {
-  "name": "mcp-obsidian-mongo-server",
+  "name": "mcp-obsidian-server",
   "version": "1.0.0",
-  "description": "MCP Server for Obsidian and MongoDB integration with Cursor AI IDE",
+  "description": "MCP Server for Obsidian integration with Cursor AI IDE",
   "main": "dist/server/mcp-server.js",
   "scripts": {
     "build": "tsc",
@@ -12,7 +12,6 @@
   "keywords": [
     "mcp",
     "obsidian",
-    "mongodb",
     "cursor",
     "ai",
     "ide",
@@ -31,7 +30,6 @@
     "google-auth-library": "^9.4.1",
     "googleapis": "^130.0.0",
     "gray-matter": "^4.0.3",
-    "mongodb": "^6.3.0",
     "node-fetch": "^2.7.0",
     "openai": "^5.8.2",
     "remark": "^15.0.1",

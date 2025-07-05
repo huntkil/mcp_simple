@@ -1,14 +1,13 @@
-# MCP Obsidian MongoDB Server - 사용 사례 및 예제
+# MCP Obsidian Server - 사용 사례 및 예제
 
 ## 📋 목차
 
 1. [기본 설정](#기본-설정)
 2. [Obsidian Vault 연동](#obsidian-vault-연동)
-3. [MongoDB 연동](#mongodb-연동)
-4. [통합 검색 사용법](#통합-검색-사용법)
-5. [실시간 동기화](#실시간-동기화)
-6. [Cursor AI IDE 연동](#cursor-ai-ide-연동)
-7. [실제 사용 시나리오](#실제-사용-시나리오)
+3. [노트 검색 사용법](#노트-검색-사용법)
+4. [실시간 동기화](#실시간-동기화)
+5. [Cursor AI IDE 연동](#cursor-ai-ide-연동)
+6. [실제 사용 시나리오](#실제-사용-시나리오)
 
 ---
 
@@ -19,7 +18,7 @@
 ```bash
 # 프로젝트 클론
 git clone <repository-url>
-cd mcp-obsidian-mongo-server
+cd mcp-obsidian-server
 
 # 의존성 설치
 npm install
@@ -51,13 +50,21 @@ npm run dev
     "includeAttachments": false,
     "maxFileSize": 10485760
   },
-  "mongodb": {
-    "connectionString": "mongodb://localhost:27017",
-    "databaseName": "obsidian_mcp",
-    "collections": {
-      "notes": "notes",
-      "metadata": "metadata",
-      "searchIndex": "search_index"
+  "googleCalendar": {
+    "clientId": "FROM_CREDENTIALS_FILE",
+    "clientSecret": "FROM_CREDENTIALS_FILE",
+    "redirectUri": "FROM_CREDENTIALS_FILE",
+    "scopes": [
+      "https://www.googleapis.com/auth/calendar",
+      "https://www.googleapis.com/auth/calendar.events"
+    ],
+    "defaultCalendarName": "ClariVein 회복 훈련",
+    "defaultTrainingTime": "07:00",
+    "defaultLocations": {
+      "gym": "헬스장",
+      "pool": "수영장",
+      "park": "공원",
+      "hospital": "병원"
     }
   }
 }
@@ -87,7 +94,7 @@ MyObsidianVault/
 │   ├── Programming/
 │   │   ├── TypeScript.md
 │   │   ├── Node.js.md
-│   │   └── MongoDB.md
+│   │   └── Development.md
 │   └── Tools/
 │       ├── Obsidian.md
 │       └── Cursor.md
@@ -115,7 +122,7 @@ created: 2024-01-15T09:00:00Z
 
 ## Notes
 - Discussed new features for [[Project B]]
-- Need to research [[MongoDB]] aggregation pipelines
+- Need to research development best practices
 - Bookmarked useful resources in [[Tools/Obsidian]]
 
 ## Links
@@ -156,7 +163,6 @@ interface User {
 
 ## Related Topics
 - [[Node.js]] - Runtime environment
-- [[MongoDB]] - Database integration
 - [[Tools/Cursor]] - IDE with TypeScript support
 ```
 
@@ -175,73 +181,12 @@ info: Vault scan completed. Notes: 25, Attachments: 3, Templates: 2
 
 ---
 
-## 🗄️ MongoDB 연동
-
-### 1. MongoDB 서버 시작
-
-```bash
-# MongoDB 서버 시작 (macOS)
-brew services start mongodb-community
-
-# 또는 Docker 사용
-docker run -d -p 27017:27017 --name mongodb mongo:latest
-```
-
-### 2. 데이터베이스 구조
-
-MongoDB에 자동으로 생성되는 컬렉션들:
-
-```javascript
-// notes 컬렉션 예제
-{
-  "_id": ObjectId("..."),
-  "obsidianId": "L25ldy1wcm9qZWN0L3Byb2plY3QtYS9vdmVydmlldy5tZA==",
-  "title": "Project A Overview",
-  "content": "# Project A Overview\n\nThis is the overview...",
-  "tags": ["project", "overview", "planning"],
-  "metadata": {
-    "created": "2024-01-15T09:00:00Z",
-    "modified": "2024-01-15T10:30:00Z"
-  },
-  "searchableText": "Project A Overview This is the overview...",
-  "lastSync": ISODate("2024-01-15T10:30:00Z"),
-  "createdAt": ISODate("2024-01-15T09:00:00Z"),
-  "updatedAt": ISODate("2024-01-15T10:30:00Z")
-}
-
-// searchIndex 컬렉션 예제
-{
-  "_id": ObjectId("..."),
-  "noteId": "L25ldy1wcm9qZWN0L3Byb2plY3QtYS9vdmVydmlldy5tZA==",
-  "obsidianId": "L25ldy1wcm9qZWN0L3Byb2plY3QtYS9vdmVydmlldy5tZA==",
-  "searchTerms": ["project", "overview", "planning", "a"],
-  "relevance": 4,
-  "lastIndexed": ISODate("2024-01-15T10:30:00Z")
-}
-```
-
-### 3. MongoDB 연결 확인
-
-```bash
-# MongoDB 연결 테스트
-curl -X POST http://localhost:4000/mcp \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "get_mongo_stats",
-    "params": {}
-  }'
-```
-
----
-
-## 🔍 통합 검색 사용법
+## 🔍 노트 검색 사용법
 
 ### 1. 기본 검색
 
 ```bash
-# 전체 검색 (Obsidian + MongoDB)
+# Obsidian 노트 검색
 curl -X POST http://localhost:4000/mcp \
   -H "Content-Type: application/json" \
   -d '{
@@ -268,8 +213,7 @@ curl -X POST http://localhost:4000/mcp \
     "params": {
       "query": "programming",
       "filters": {
-        "tags": ["typescript", "javascript"],
-        "type": "both"
+        "tags": ["typescript", "javascript"]
       },
       "limit": 5
     }
@@ -319,20 +263,6 @@ curl -X POST http://localhost:4000/mcp \
         "path": "/Users/username/Documents/ObsidianVault/Knowledge Base/Programming/TypeScript.md",
         "tags": ["programming", "typescript", "javascript"]
       }
-    },
-    {
-      "type": "mongo",
-      "id": "L25ldy1wcm9qZWN0L3Byb2plY3QtYS9vdmVydmlldy5tZA==",
-      "title": "Node.js with TypeScript",
-      "snippet": "Content: ...TypeScript integration with Node.js...",
-      "tags": ["nodejs", "typescript", "backend"],
-      "relevance": 12,
-      "source": {
-        "obsidianId": "L25ldy1wcm9qZWN0L3Byb2plY3QtYS9vdmVydmlldy5tZA==",
-        "title": "Node.js with TypeScript",
-        "content": "Node.js with TypeScript integration...",
-        "tags": ["nodejs", "typescript", "backend"]
-      }
     }
   ]
 }
@@ -354,7 +284,7 @@ tail -f logs/combined.log | grep "File changed"
 예상 출력:
 ```
 info: File changed: /Users/username/Documents/ObsidianVault/Daily Notes/2024-01-15.md
-info: Updated note in MongoDB: L25ldy1wcm9qZWN0L3Byb2plY3QtYS9vdmVydmlldy5tZA==
+info: Note updated in cache: L25ldy1wcm9qZWN0L3Byb2plY3QtYS9vdmVydmlldy5tZA==
 ```
 
 ### 2. 새 노트 생성
@@ -388,9 +318,9 @@ Cursor AI IDE에서 MCP 서버를 연결하려면:
 ```json
 {
   "mcpServers": {
-    "obsidian-mongo": {
+    "obsidian": {
       "command": "node",
-      "args": ["/path/to/mcp-obsidian-mongo-server/dist/server/mcp-server.js"],
+      "args": ["/path/to/mcp-obsidian-server/dist/server/mcp-server.js"],
       "env": {
         "NODE_ENV": "production"
       }
@@ -444,7 +374,7 @@ Cursor AI: Obsidian 노트를 분석하여 프로젝트 상태를 요약합니�
 1. Obsidian에서 개발 노트 작성
 2. MCP 서버가 실시간으로 동기화
 3. Cursor AI에서 코드 관련 노트 검색
-4. AI가 코드 작성 시 관련 문서 참조
+4. AI가 개발자의 노트를 참조하여 코드 제안
 
 **예제**:
 ```bash
@@ -471,7 +401,7 @@ curl -X POST http://localhost:4000/mcp \
 **사용법**:
 1. 각 프로젝트별 Obsidian 폴더 구성
 2. 일일 노트로 진행 상황 기록
-3. MCP 서버로 프로젝트별 통계 생성
+3. MCP 서버로 프로젝트별 검색
 4. AI가 프로젝트 상태 분석 및 보고서 생성
 
 **예제**:
@@ -507,7 +437,7 @@ curl -X POST http://localhost:4000/mcp \
 
 **예제**:
 ```bash
-# MongoDB 학습 노트 검색
+# 개발 학습 노트 검색
 curl -X POST http://localhost:4000/mcp \
   -H "Content-Type: application/json" \
   -d '{
@@ -515,9 +445,9 @@ curl -X POST http://localhost:4000/mcp \
     "id": 1,
     "method": "search_notes",
     "params": {
-      "query": "MongoDB aggregation",
+      "query": "development patterns",
       "filters": {
-        "tags": ["mongodb", "learning"]
+        "tags": ["development", "learning"]
       }
     }
   }'
@@ -537,7 +467,7 @@ export async function handleSearchByDate(params: any): Promise<any> {
   const { startDate, endDate, tags } = params;
   
   // 날짜 범위와 태그로 검색
-  const results = await searchService.searchByDateRange(startDate, endDate, tags);
+  const results = await obsidianConnector.searchByDateRange(startDate, endDate, tags);
   
   return results;
 }
@@ -549,11 +479,11 @@ registerMethodHandler('search_by_date', handleSearchByDate);
 ### 2. 백업 및 복구
 
 ```bash
-# MongoDB 백업
-mongodump --db obsidian_mcp --out ./backup
+# Obsidian Vault 백업
+cp -r /path/to/obsidian/vault ./backup-$(date +%Y%m%d)
 
-# MongoDB 복구
-mongorestore --db obsidian_mcp ./backup/obsidian_mcp
+# 서버 로그 백업
+cp -r logs ./logs-backup-$(date +%Y%m%d)
 ```
 
 ### 3. 성능 모니터링
@@ -573,16 +503,16 @@ grep "File changed" logs/combined.log | wc -l
 
 ### 1. 연결 문제
 
-**문제**: MongoDB 연결 실패
+**문제**: 서버 연결 실패
 ```bash
-# MongoDB 서버 상태 확인
-brew services list | grep mongodb
+# 서버 상태 확인
+curl -X GET http://localhost:4000/health
 
-# 연결 문자열 확인
-cat config/server-config.json | grep connectionString
+# 포트 사용 확인
+netstat -an | grep 4000
 ```
 
-**해결**: MongoDB 서버 시작 및 연결 문자열 수정
+**해결**: 서버 재시작 및 포트 확인
 
 ### 2. 파일 권한 문제
 
@@ -627,7 +557,7 @@ curl -X POST http://localhost:4000/mcp \
   -d '{
     "jsonrpc": "2.0",
     "id": 1,
-    "method": "get_stats",
+    "method": "get_all_notes",
     "params": {}
   }'
 ```
@@ -635,10 +565,10 @@ curl -X POST http://localhost:4000/mcp \
 ### 2. 성능 지표
 
 - **노트 수**: 총 Obsidian 노트 개수
-- **동기화 상태**: MongoDB와 동기화된 노트 비율
+- **동기화 상태**: 실시간 동기화 상태
 - **검색 성능**: 평균 검색 응답 시간
 - **파일 변경 빈도**: 시간당 감지된 파일 변경 수
 
 ---
 
-이 가이드를 따라하면 MCP Obsidian MongoDB Server를 효과적으로 활용할 수 있습니다. 추가 질문이나 문제가 있으면 GitHub Issues에 등록해 주세요! 
+이 가이드를 따라하면 MCP Obsidian Server를 효과적으로 활용할 수 있습니다. 추가 질문이나 문제가 있으면 GitHub Issues에 등록해 주세요! 
