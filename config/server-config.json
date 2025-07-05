@@ -1,0 +1,62 @@
+{
+  "server": {
+    "port": 4000,
+    "host": "localhost",
+    "logLevel": "info",
+    "cors": {
+      "enabled": true,
+      "origin": "*"
+    }
+  },
+  "obsidian": {
+    "vaultPath": "",
+    "watchForChanges": true,
+    "ignorePatterns": [
+      ".obsidian/**",
+      "*.temp",
+      "*.tmp",
+      "*.log"
+    ],
+    "includeAttachments": false,
+    "maxFileSize": 10485760
+  },
+  "mongodb": {
+    "connectionString": "FROM_CREDENTIALS_FILE",
+    "databaseName": "FROM_CREDENTIALS_FILE",
+    "collections": {
+      "notes": "notes",
+      "metadata": "metadata",
+      "searchIndex": "search_index"
+    },
+    "options": {
+      "maxPoolSize": 10,
+      "serverSelectionTimeoutMS": 5000,
+      "socketTimeoutMS": 45000
+    }
+  },
+  "search": {
+    "defaultLimit": 20,
+    "maxLimit": 100,
+    "enableFuzzySearch": true,
+    "enableFullTextSearch": true,
+    "cacheResults": true,
+    "cacheTTL": 300
+  },
+  "googleCalendar": {
+    "clientId": "FROM_CREDENTIALS_FILE",
+    "clientSecret": "FROM_CREDENTIALS_FILE",
+    "redirectUri": "FROM_CREDENTIALS_FILE",
+    "scopes": [
+      "https://www.googleapis.com/auth/calendar",
+      "https://www.googleapis.com/auth/calendar.events"
+    ],
+    "defaultCalendarName": "ClariVein 회복 훈련",
+    "defaultTrainingTime": "07:00",
+    "defaultLocations": {
+      "gym": "헬스장",
+      "pool": "수영장",
+      "park": "공원",
+      "hospital": "병원"
+    }
+  }
+} 

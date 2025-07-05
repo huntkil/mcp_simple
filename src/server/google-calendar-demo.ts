@@ -1,0 +1,720 @@
+import express from 'express';
+import { log } from '../utils/logger';
+
+const router = express.Router();
+
+// Google Calendar API 설정
+let accessToken: string | null = null;
+let refreshToken: string | null = null;
+
+// Google Calendar 설정 로드
+function loadCalendarConfig() {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const configPath = path.join(process.cwd(), 'config', 'server-config.json');
+    const configData = fs.readFileSync(configPath, 'utf8');
+    const config = JSON.parse(configData);
+    return config.googleCalendar;
+  } catch (error) {
+    log.error('Failed to load calendar config', error);
+    return null;
+  }
+}
+
+// Google Calendar API 요청 함수
+async function makeCalendarAPIRequest(endpoint: string, method: string = 'GET', data?: any) {
+  if (!accessToken) {
+    throw new Error('인증이 필요합니다. 먼저 OAuth 인증을 완료하세요.');
+  }
+
+  const fetch = require('node-fetch');
+  const url = `https://www.googleapis.com/calendar/v3${endpoint}`;
+  
+  const options: any = {
+    method,
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    }
+  };
+
+  if (data && (method === 'POST' || method === 'PUT' || method === 'PATCH')) {
+    options.body = JSON.stringify(data);
+  }
+
+  const response = await fetch(url, options);
+  
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Google Calendar API 오류: ${response.status} - ${errorText}`);
+  }
+
+  return await response.json();
+}
+
+// 액세스 토큰 교환 함수
+async function exchangeCodeForTokens(authCode: string) {
+  const config = loadCalendarConfig();
+  if (!config) {
+    throw new Error('Google Calendar 설정이 없습니다.');
+  }
+
+  const fetch = require('node-fetch');
+  const tokenUrl = 'https://oauth2.googleapis.com/token';
+  
+  const tokenData = {
+    client_id: config.clientId,
+    client_secret: config.clientSecret,
+    code: authCode,
+    grant_type: 'authorization_code',
+    redirect_uri: config.redirectUri
+  };
+
+  const response = await fetch(tokenUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams(tokenData)
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`토큰 교환 실패: ${response.status} - ${errorText}`);
+  }
+
+  const tokens = await response.json();
+  accessToken = tokens.access_token;
+  refreshToken = tokens.refresh_token;
+  
+  return tokens;
+}
+
+// Google Calendar 연동 상태 확인
+router.get('/status', (req, res) => {
+  const config = loadCalendarConfig();
+  
+  if (!config || !config.clientId || !config.clientSecret) {
+    return res.json({
+      success: false,
+      message: 'Google Calendar가 설정되지 않았습니다.',
+      configured: false
+    });
+  }
+
+  res.json({
+    success: true,
+    message: 'Google Calendar 설정이 완료되었습니다.',
+    configured: true,
+    authenticated: !!accessToken,
+    clientId: config.clientId.substring(0, 20) + '...',
+    redirectUri: config.redirectUri
+  });
+});
+
+// 인증 URL 생성 (간단 버전)
+router.get('/auth-url', (req, res) => {
+  const config = loadCalendarConfig();
+  
+  if (!config) {
+    return res.status(400).json({
+      success: false,
+      error: 'Google Calendar 설정이 필요합니다.'
+    });
+  }
+
+  // Google OAuth2 인증 URL 생성
+  const scopes = [
+    'https://www.googleapis.com/auth/calendar',
+    'https://www.googleapis.com/auth/calendar.events'
+  ].join(' ');
+
+  const authUrl = 'https://accounts.google.com/o/oauth2/v2/auth?' +
+    `client_id=${encodeURIComponent(config.clientId)}&` +
+    `redirect_uri=${encodeURIComponent(config.redirectUri)}&` +
+    `scope=${encodeURIComponent(scopes)}&` +
+    'response_type=code&' +
+    'access_type=offline&' +
+    'prompt=consent';
+
+  res.json({
+    success: true,
+    authUrl: authUrl,
+    message: '이 URL을 브라우저에서 열어 Google Calendar 인증을 진행하세요.',
+    instructions: [
+      '1. 위 URL을 복사하여 브라우저에서 열기',
+      '2. Google 계정으로 로그인',
+      '3. Calendar 권한 승인',
+      '4. 인증 코드 받기'
+    ]
+  });
+});
+
+// 인증 콜백 처리
+router.get('/auth/callback', async (req, res) => {
+  const { code, error } = req.query;
+  
+  if (error) {
+    return res.json({
+      success: false,
+      error: `인증 오류: ${error}`,
+      message: '인증이 취소되었거나 오류가 발생했습니다.'
+    });
+  }
+  
+  if (!code) {
+    return res.json({
+      success: false,
+      error: '인증 코드가 없습니다.',
+      message: '인증 과정에서 오류가 발생했습니다.'
+    });
+  }
+
+  try {
+    // 인증 코드를 액세스 토큰으로 교환
+    const tokens = await exchangeCodeForTokens(code as string);
+    
+    res.json({
+      success: true,
+      message: '인증이 성공적으로 완료되었습니다!',
+      authenticated: true,
+      nextSteps: [
+        '1. Google Calendar 인증이 완료되었습니다.',
+        '2. 이제 ClariVein 훈련 일정을 Google Calendar에 직접 생성할 수 있습니다.',
+        '3. POST /api/calendar/create-events 엔드포인트를 사용하세요.'
+      ]
+    });
+  } catch (error) {
+    log.error('Token exchange failed', error);
+    res.status(500).json({
+      success: false,
+      error: '토큰 교환에 실패했습니다.',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// 기존 ClariVein 이벤트 삭제
+router.delete('/delete-clarivein-events', async (req, res) => {
+  try {
+    if (!accessToken) {
+      return res.status(401).json({
+        success: false,
+        error: '인증이 필요합니다.',
+        message: '먼저 Google Calendar 인증을 완료하세요.'
+      });
+    }
+
+    const { calendarId = 'primary' } = req.body;
+
+    // ClariVein 관련 이벤트 검색
+    const searchQuery = 'ClariVein';
+    const timeMin = '2024-01-01T00:00:00Z';
+    const timeMax = '2026-12-31T23:59:59Z';
+    
+    const eventsResponse = await makeCalendarAPIRequest(
+      `/calendars/${calendarId}/events?q=${encodeURIComponent(searchQuery)}&timeMin=${timeMin}&timeMax=${timeMax}`
+    );
+
+    const deletedEvents = [];
+    const errors = [];
+
+    // 각 이벤트 삭제
+    for (const event of eventsResponse.items || []) {
+      try {
+        await makeCalendarAPIRequest(`/calendars/${calendarId}/events/${event.id}`, 'DELETE');
+        deletedEvents.push({
+          title: event.summary,
+          date: event.start?.dateTime || event.start?.date,
+          eventId: event.id
+        });
+        log.info(`Deleted calendar event: ${event.summary}`);
+      } catch (error) {
+        log.error(`Failed to delete event: ${event.summary}`, error);
+        errors.push({
+          title: event.summary,
+          error: error instanceof Error ? error.message : 'Unknown error'
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `${deletedEvents.length}개의 ClariVein 관련 일정이 삭제되었습니다.`,
+      data: {
+        deletedEvents: deletedEvents,
+        errors: errors
+      }
+    });
+
+  } catch (error) {
+    log.error('Failed to delete ClariVein events', error);
+    res.status(500).json({
+      success: false,
+      error: 'ClariVein 이벤트 삭제에 실패했습니다.',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// Google Calendar에 직접 이벤트 생성
+router.post('/create-events', async (req, res) => {
+  try {
+    if (!accessToken) {
+      return res.status(401).json({
+        success: false,
+        error: '인증이 필요합니다.',
+        message: '먼저 Google Calendar 인증을 완료하세요.'
+      });
+    }
+
+    const {
+      operationDate = '2025-06-25', // 2025년 7월 3일 - 8일 = 2025년 6월 25일
+      currentDaysSinceOperation = 8,
+      trainingTime = '07:00',
+      location = {},
+      calendarId = 'primary'
+    } = req.body;
+
+    // 훈련 일정 템플릿 생성
+    const scheduleTemplate = generateTrainingSchedule({
+      operationDate,
+      currentDaysSinceOperation,
+      trainingTime,
+      location: {
+        gym: location.gym || '헬스장',
+        park: location.park || '공원',
+        hospital: location.hospital || '병원'
+      }
+    });
+
+    const createdEvents = [];
+    const errors = [];
+
+    // 각 이벤트를 Google Calendar에 생성
+    for (const event of scheduleTemplate.events) {
+      try {
+        const calendarEvent = {
+          summary: event.title,
+          description: event.description,
+          location: event.location,
+          start: {
+            dateTime: `${event.startDate}T${event.startTime}:00`,
+            timeZone: 'Asia/Seoul'
+          },
+          end: {
+            dateTime: `${event.startDate}T${event.endTime}:00`,
+            timeZone: 'Asia/Seoul'
+          },
+          reminders: {
+            useDefault: false,
+            overrides: [
+              { method: 'popup', minutes: 30 },
+              { method: 'email', minutes: 60 }
+            ]
+          }
+        };
+
+        const result = await makeCalendarAPIRequest(`/calendars/${calendarId}/events`, 'POST', calendarEvent);
+        createdEvents.push({
+          title: event.title,
+          date: event.startDate,
+          googleEventId: result.id,
+          htmlLink: result.htmlLink
+        });
+
+        log.info(`Created calendar event: ${event.title} on ${event.startDate}`);
+      } catch (error) {
+        log.error(`Failed to create event: ${event.title}`, error);
+        errors.push({
+          title: event.title,
+          error: error instanceof Error ? error.message : 'Unknown error'
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `${createdEvents.length}개의 일정이 Google Calendar에 성공적으로 생성되었습니다!`,
+      data: {
+        totalEvents: scheduleTemplate.events.length,
+        successfulEvents: createdEvents.length,
+        failedEvents: errors.length,
+        createdEvents: createdEvents,
+        errors: errors,
+        calendarLink: `https://calendar.google.com/calendar/u/0/r`
+      }
+    });
+
+  } catch (error) {
+    log.error('Failed to create calendar events', error);
+    res.status(500).json({
+      success: false,
+      error: 'Google Calendar 이벤트 생성에 실패했습니다.',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// ClariVein 훈련 일정 템플릿 생성
+router.post('/create-schedule-template', (req, res) => {
+  try {
+    const {
+      operationDate = '2025-06-25', // 2025년 7월 3일 - 8일 = 2025년 6월 25일
+      currentDaysSinceOperation = 8,
+      trainingTime = '07:00',
+      location = {}
+    } = req.body;
+
+    // 훈련 일정 템플릿 생성
+    const scheduleTemplate = generateTrainingSchedule({
+      operationDate,
+      currentDaysSinceOperation,
+      trainingTime,
+      location: {
+        gym: location.gym || '헬스장',
+        park: location.park || '공원',
+        hospital: location.hospital || '병원'
+      }
+    });
+
+    res.json({
+      success: true,
+      message: `${scheduleTemplate.events.length}개의 훈련 일정 템플릿이 생성되었습니다.`,
+      data: {
+        totalEvents: scheduleTemplate.events.length,
+        trainingEvents: scheduleTemplate.trainingEvents,
+        medicalEvents: scheduleTemplate.medicalEvents,
+        schedule: scheduleTemplate.events,
+        csvData: generateCSVData(scheduleTemplate.events),
+        instructions: [
+          '인증이 완료되었다면:',
+          '• POST /api/calendar/create-events 를 사용해서 Google Calendar에 직접 생성',
+          '또는 수동으로:',
+          '• 아래 CSV 데이터를 복사하기',
+          '• Google Calendar 웹사이트에서 "설정 > 가져오기 및 내보내기" 선택',
+          '• CSV 파일로 저장 후 업로드'
+        ]
+      }
+    });
+
+  } catch (error) {
+    log.error('Failed to create schedule template', error);
+    res.status(500).json({
+      success: false,
+      error: '일정 템플릿 생성에 실패했습니다.',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// 훈련 일정 생성 함수
+function generateTrainingSchedule(params: any) {
+  const { operationDate, currentDaysSinceOperation, trainingTime, location } = params;
+  const events: any[] = [];
+  let trainingEvents = 0;
+  let medicalEvents = 0;
+
+  // 훈련 템플릿
+  const trainingTemplates = [
+    // 1-2주차: 저충격 유산소
+    {
+      day: 8, phase: '저충격유산소', title: 'ClariVein 회복 - 저충격 유산소 시작',
+      activities: ['고정식 자전거 15분', '상체 스트레칭 10분'], location: location.gym, duration: 60
+    },
+    {
+      day: 9, phase: '저충격유산소', title: 'ClariVein 회복 - 걷기 + 자전거',
+      activities: ['빠른 걷기 20분', '고정식 자전거 10분'], location: location.gym, duration: 60
+    },
+    {
+      day: 10, phase: '저충격유산소', title: 'ClariVein 회복 - 일립티컬 도입',
+      activities: ['일립티컬 15분', '상체 근력 운동 15분'], location: location.gym, duration: 60
+    },
+    {
+      day: 14, phase: '저충격유산소', title: 'ClariVein 회복 - 2주차 마무리',
+      activities: ['고정식 자전거 25분', '상체 근력 운동'], location: location.gym, duration: 60, milestone: true
+    },
+    // 3-4주차: 조깅 도입
+    {
+      day: 22, phase: '조깅도입', title: 'ClariVein 회복 - 첫 조깅 시도',
+      activities: ['워밍업 걷기 10분', '조깅 5분 + 걷기 2분 (2회)'], location: location.park, duration: 60, milestone: true
+    },
+    {
+      day: 28, phase: '조깅도입', title: 'ClariVein 회복 - 1개월 평가',
+      activities: ['조깅 테스트 15분', '전반적 상태 점검'], location: location.park, duration: 60, milestone: true
+    },
+    // 5-6주차: 연속 달리기
+    {
+      day: 35, phase: '연속달리기', title: 'ClariVein 회복 - 장거리 테스트',
+      activities: ['워밍업 걷기 10분', '연속 조깅 30분'], location: location.park, duration: 90, milestone: true
+    },
+    // 7-8주차: 구조화된 운동
+    {
+      day: 49, phase: '구조화운동', title: 'ClariVein 회복 - 장거리 런',
+      activities: ['워밍업 조깅 10분', '연속 달리기 40분'], location: location.park, duration: 120, milestone: true
+    },
+    // 9-12주차: 마라톤 훈련
+    {
+      day: 57, phase: '마라톤훈련', title: '마라톤 훈련 - 본격 시작',
+      activities: ['워밍업 조깅 15분', '템포 런 15분'], location: location.park, duration: 90, milestone: true
+    },
+    {
+      day: 84, phase: '마라톤훈련', title: '마라톤 준비 - 최종 평가',
+      activities: ['가벼운 조깅 30분', '전신 스트레칭 20분'], location: location.park, duration: 90, milestone: true
+    }
+  ];
+
+  // 의료 일정 템플릿
+  const medicalTemplates = [
+    { day: 14, title: '초음파 검사', description: '2주차 정맥 폐쇄 상태 확인', location: location.hospital },
+    { day: 28, title: '1개월 의료진 상담', description: '회복 상태 점검 및 다음 단계 계획', location: location.hospital },
+    { day: 56, title: '8주차 상태 평가', description: '마라톤 훈련 시작 가능 여부 평가', location: location.hospital },
+    { day: 84, title: '최종 듀플렉스 스캔', description: '마라톤 참가 전 최종 혈관 상태 확인', location: location.hospital }
+  ];
+
+  const baseDate = new Date(operationDate);
+
+  // 훈련 일정 생성
+  trainingTemplates.forEach(template => {
+    if (template.day >= currentDaysSinceOperation) {
+      const eventDate = new Date(baseDate);
+      eventDate.setDate(eventDate.getDate() + template.day);
+      
+      const [hours, minutes] = trainingTime.split(':');
+      const startTime = new Date(eventDate);
+      startTime.setHours(parseInt(hours), parseInt(minutes), 0, 0);
+      
+      const endTime = new Date(startTime);
+      endTime.setMinutes(endTime.getMinutes() + template.duration);
+
+      events.push({
+        title: template.title,
+        description: `📅 수술 후 ${template.day}일째 - ${template.phase} 단계\n\n🏃‍♂️ 운동 내용:\n${template.activities.map(a => `• ${a}`).join('\n')}\n\n${template.milestone ? '⭐ 중요 마일스톤\n' : ''}⚠️ 안전 수칙: 몸 상태 변화 시 즉시 운동 중단`,
+        startDate: startTime.toISOString().split('T')[0],
+        startTime: startTime.toTimeString().split(' ')[0]?.substring(0, 5) || '07:00',
+        endTime: endTime.toTimeString().split(' ')[0]?.substring(0, 5) || '08:00',
+        location: template.location,
+        type: 'training',
+        phase: template.phase,
+        day: template.day,
+        milestone: template.milestone || false
+      });
+      trainingEvents++;
+    }
+  });
+
+  // 의료 일정 생성
+  medicalTemplates.forEach(template => {
+    if (template.day >= currentDaysSinceOperation) {
+      const eventDate = new Date(baseDate);
+      eventDate.setDate(eventDate.getDate() + template.day);
+      
+      const startTime = new Date(eventDate);
+      startTime.setHours(14, 0, 0, 0); // 오후 2시
+      
+      const endTime = new Date(startTime);
+      endTime.setHours(15, 0, 0, 0); // 1시간
+
+      events.push({
+        title: template.title,
+        description: template.description,
+        startDate: startTime.toISOString().split('T')[0],
+        startTime: '14:00',
+        endTime: '15:00',
+        location: template.location,
+        type: 'medical',
+        day: template.day
+      });
+      medicalEvents++;
+    }
+  });
+
+  // 날짜순 정렬
+  events.sort((a, b) => a.day - b.day);
+
+  return {
+    events,
+    trainingEvents,
+    medicalEvents
+  };
+}
+
+// CSV 데이터 생성
+function generateCSVData(events: any[]) {
+  const headers = ['Subject', 'Start Date', 'Start Time', 'End Date', 'End Time', 'Description', 'Location'];
+  const rows = events.map(event => [
+    event.title,
+    event.startDate,
+    event.startTime,
+    event.startDate,
+    event.endTime,
+    event.description.replace(/\n/g, ' '),
+    event.location
+  ]);
+
+  return [headers, ...rows].map(row => 
+    row.map(cell => `"${cell}"`).join(',')
+  ).join('\n');
+}
+
+// 특정 날짜의 일정 조회
+router.get('/schedule/:date', (req, res) => {
+  const { date } = req.params;
+  
+  // 간단한 예시 데이터
+  const mockSchedule = {
+    date: date,
+    events: [
+      {
+        time: '07:00-08:00',
+        title: 'ClariVein 회복 - 저충격 유산소',
+        type: 'training',
+        location: '헬스장',
+        activities: ['고정식 자전거 15분', '상체 스트레칭 10분'],
+        notes: '첫 운동 재개, 무리하지 말고 몸 상태 확인'
+      }
+    ]
+  };
+
+  res.json({
+    success: true,
+    data: mockSchedule
+  });
+});
+
+// 기존 일정 삭제 후 새로운 일정 생성 (통합 엔드포인트)
+router.post('/reset-and-create-events', async (req, res) => {
+  try {
+    if (!accessToken) {
+      return res.status(401).json({
+        success: false,
+        error: '인증이 필요합니다.',
+        message: '먼저 Google Calendar 인증을 완료하세요.'
+      });
+    }
+
+    const {
+      operationDate = '2025-06-25', // 2025년 7월 3일 - 8일 = 2025년 6월 25일
+      currentDaysSinceOperation = 8,
+      trainingTime = '07:00',
+      location = {},
+      calendarId = 'primary'
+    } = req.body;
+
+    // 1단계: 기존 ClariVein 이벤트 삭제
+    log.info('기존 ClariVein 이벤트 삭제 시작...');
+    const searchQuery = 'ClariVein';
+    const timeMin = '2024-01-01T00:00:00Z';
+    const timeMax = '2026-12-31T23:59:59Z';
+    
+    const eventsResponse = await makeCalendarAPIRequest(
+      `/calendars/${calendarId}/events?q=${encodeURIComponent(searchQuery)}&timeMin=${timeMin}&timeMax=${timeMax}`
+    );
+
+    const deletedEvents = [];
+    for (const event of eventsResponse.items || []) {
+      try {
+        await makeCalendarAPIRequest(`/calendars/${calendarId}/events/${event.id}`, 'DELETE');
+        deletedEvents.push({
+          title: event.summary,
+          date: event.start?.dateTime || event.start?.date,
+          eventId: event.id
+        });
+        log.info(`Deleted calendar event: ${event.summary}`);
+      } catch (error) {
+        log.error(`Failed to delete event: ${event.summary}`, error);
+      }
+    }
+
+    // 2단계: 새로운 훈련 일정 생성
+    log.info('새로운 훈련 일정 생성 시작...');
+    const scheduleTemplate = generateTrainingSchedule({
+      operationDate,
+      currentDaysSinceOperation,
+      trainingTime,
+      location: {
+        gym: location.gym || '헬스장',
+        park: location.park || '공원',
+        hospital: location.hospital || '병원'
+      }
+    });
+
+    const createdEvents = [];
+    const errors = [];
+
+    // 각 이벤트를 Google Calendar에 생성
+    for (const event of scheduleTemplate.events) {
+      try {
+        const calendarEvent = {
+          summary: event.title,
+          description: event.description,
+          location: event.location,
+          start: {
+            dateTime: `${event.startDate}T${event.startTime}:00`,
+            timeZone: 'Asia/Seoul'
+          },
+          end: {
+            dateTime: `${event.startDate}T${event.endTime}:00`,
+            timeZone: 'Asia/Seoul'
+          },
+          reminders: {
+            useDefault: false,
+            overrides: [
+              { method: 'popup', minutes: 30 },
+              { method: 'email', minutes: 60 }
+            ]
+          }
+        };
+
+        const result = await makeCalendarAPIRequest(`/calendars/${calendarId}/events`, 'POST', calendarEvent);
+        createdEvents.push({
+          title: event.title,
+          date: event.startDate,
+          googleEventId: result.id,
+          htmlLink: result.htmlLink
+        });
+
+        log.info(`Created calendar event: ${event.title} on ${event.startDate}`);
+      } catch (error) {
+        log.error(`Failed to create event: ${event.title}`, error);
+        errors.push({
+          title: event.title,
+          error: error instanceof Error ? error.message : 'Unknown error'
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `기존 ${deletedEvents.length}개 일정을 삭제하고, 새로운 ${createdEvents.length}개 일정을 생성했습니다!`,
+      data: {
+        operationDate,
+        currentDaysSinceOperation,
+        deleted: {
+          count: deletedEvents.length,
+          events: deletedEvents
+        },
+        created: {
+          totalEvents: scheduleTemplate.events.length,
+          successfulEvents: createdEvents.length,
+          failedEvents: errors.length,
+          events: createdEvents,
+          errors: errors
+        },
+        calendarLink: `https://calendar.google.com/calendar/u/0/r`,
+        nextTrainingDate: createdEvents.length > 0 ? createdEvents[0].date : null
+      }
+    });
+
+  } catch (error) {
+    log.error('Failed to reset and create calendar events', error);
+    res.status(500).json({
+      success: false,
+      error: '일정 재설정에 실패했습니다.',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+export default router; 

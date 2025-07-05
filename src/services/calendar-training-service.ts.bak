@@ -1,0 +1,436 @@
+import { GoogleCalendarConnector } from '../connectors/google-calendar-connector';
+import { 
+  TrainingScheduleTemplate, 
+  MedicalScheduleTemplate, 
+  BulkEventCreationRequest, 
+  CalendarEventInput,
+  CalendarServiceResponse,
+  CalendarEventOutput
+} from '../types/google-calendar-types';
+import { log } from '../utils/logger';
+
+export class CalendarTrainingService {
+  private calendarConnector: GoogleCalendarConnector;
+
+  constructor(calendarConnector: GoogleCalendarConnector) {
+    this.calendarConnector = calendarConnector;
+  }
+
+  /**
+   * ClariVein 시술 후 훈련 일정 템플릿
+   */
+  private getTrainingTemplates(): TrainingScheduleTemplate[] {
+    return [
+      // 1-2주차: 저충격 유산소 단계
+      {
+        phase: '저충격유산소',
+        daysSinceOperation: 8,
+        title: 'ClariVein 회복 - 저충격 유산소 시작',
+        duration: 60,
+        activities: ['고정식 자전거 15분 (낮은 강도)', '상체 스트레칭 10분', '압박 스타킹 착용 확인', '종아리 상태 체크'],
+        notes: '첫 운동 재개, 무리하지 말고 몸 상태 확인',
+        checkpoints: ['압박 스타킹 착용', '종아리 압통 체크', '부종 상태 확인']
+      },
+      {
+        phase: '저충격유산소',
+        daysSinceOperation: 9,
+        title: 'ClariVein 회복 - 걷기 + 자전거',
+        duration: 60,
+        activities: ['빠른 걷기 20분', '고정식 자전거 10분', '코어 운동 (가벼운 플랭크 2세트)', '증상 모니터링'],
+        notes: '운동 강도 약간 증가, 압박 스타킹 지속 착용',
+        checkpoints: ['운동 중 통증 체크', '압박 착용 상태', '종아리 반응 관찰']
+      },
+      {
+        phase: '저충격유산소',
+        daysSinceOperation: 10,
+        title: 'ClariVein 회복 - 일립티컬 도입',
+        duration: 60,
+        activities: ['일립티컬 15분 (낮은 강도)', '상체 근력 운동 15분', '스트레칭 10분', '압박 스타킹 상태 확인'],
+        notes: '새로운 운동 기구 도입, 다리 반응 주의 깊게 관찰',
+        checkpoints: ['새로운 운동 적응도', '다리 피로도', '압박 효과']
+      },
+      {
+        phase: '저충격유산소',
+        daysSinceOperation: 14,
+        title: 'ClariVein 회복 - 2주차 마무리',
+        duration: 60,
+        activities: ['고정식 자전거 25분', '상체 근력 운동', '다음 단계 준비 점검', '초음파 검사 예약 확인'],
+        notes: '2주차 완료! 초음파 검사 예약 필수 확인',
+        checkpoints: ['2주차 상태 평가', '초음파 검사 준비', '다음 단계 계획'],
+        isImportantMilestone: true
+      },
+      // 3-4주차: 조깅 도입 단계
+      {
+        phase: '조깅도입',
+        daysSinceOperation: 22,
+        title: 'ClariVein 회복 - 첫 조깅 시도',
+        duration: 60,
+        activities: ['워밍업 걷기 10분', '조깅 5분 + 걷기 2분 (2회 반복)', '쿨다운 걷기 10분', '압박 슬리브 착용 필수'],
+        notes: '첫 조깅 시도, 무리하지 말고 점진적 진행',
+        checkpoints: ['조깅 중 통증', '압박 슬리브 효과', '회복 반응'],
+        isImportantMilestone: true
+      },
+      {
+        phase: '조깅도입',
+        daysSinceOperation: 28,
+        title: 'ClariVein 회복 - 1개월 평가',
+        duration: 60,
+        activities: ['조깅 테스트 (15분 연속)', '전반적 상태 점검', '의료진 상담 및 다음 단계 계획'],
+        notes: '1개월 완료! 의료진 상담으로 다음 단계 승인 받기',
+        checkpoints: ['1개월 회복 상태', '연속 조깅 가능성', '의료진 승인'],
+        isImportantMilestone: true
+      },
+      // 5-6주차: 연속 달리기 단계
+      {
+        phase: '연속달리기',
+        daysSinceOperation: 35,
+        title: 'ClariVein 회복 - 장거리 테스트',
+        duration: 90,
+        activities: ['워밍업 걷기 10분', '연속 조깅 30분', '쿨다운 걷기 15분', '5주차 상태 평가'],
+        notes: '5주차 완료, 연속 달리기 30분 달성',
+        checkpoints: ['장거리 지구력', '다리 상태', '전반적 컨디션'],
+        isImportantMilestone: true
+      },
+      // 7-8주차: 구조화된 운동 단계
+      {
+        phase: '구조화운동',
+        daysSinceOperation: 49,
+        title: 'ClariVein 회복 - 장거리 런',
+        duration: 120,
+        activities: ['워밍업 조깅 10분', '연속 달리기 40분', '쿨다운 걷기 15분', '7주차 상태 평가'],
+        notes: '7주차 완료, 구조화된 운동 단계 마무리',
+        checkpoints: ['고강도 운동 적응', '장거리 능력', '다음 단계 준비'],
+        isImportantMilestone: true
+      },
+      // 9-12주차: 마라톤 훈련 단계
+      {
+        phase: '마라톤훈련',
+        daysSinceOperation: 57,
+        title: '마라톤 훈련 - 본격 시작',
+        duration: 90,
+        activities: ['워밍업 조깅 15분', '템포 런 15분', '쿨다운 조깅 10분', '스트레칭 10분'],
+        notes: '마라톤 훈련 본격 시작',
+        checkpoints: ['템포 런 적응', '마라톤 페이스', '지구력 향상'],
+        isImportantMilestone: true
+      },
+      {
+        phase: '마라톤훈련',
+        daysSinceOperation: 84,
+        title: '마라톤 준비 - 최종 평가',
+        duration: 90,
+        activities: ['가벼운 조깅 30분', '전신 스트레칭 20분', '마라톤 참가 최종 결정', '듀플렉스 스캔 예약'],
+        notes: '12주차 완료! 마라톤 참가 최종 승인',
+        checkpoints: ['최종 상태 평가', '마라톤 준비도', '의료진 최종 승인'],
+        isImportantMilestone: true
+      }
+    ];
+  }
+
+  /**
+   * 의료 일정 템플릿
+   */
+  private getMedicalTemplates(): MedicalScheduleTemplate[] {
+    return [
+      {
+        type: 'ultrasound',
+        daysSinceOperation: 14,
+        title: '초음파 검사',
+        description: '2주차 완료 후 초음파 검사로 정맥 폐쇄 상태 확인',
+        duration: 60,
+        location: '병원',
+        isRequired: true,
+        reminders: [
+          { method: 'popup', minutes: 1440 }, // 하루 전
+          { method: 'popup', minutes: 120 }   // 2시간 전
+        ]
+      },
+      {
+        type: 'consultation',
+        daysSinceOperation: 28,
+        title: '1개월 의료진 상담',
+        description: '4주차 완료 후 전반적 회복 상태 점검 및 다음 단계 계획 수립',
+        duration: 60,
+        location: '병원',
+        isRequired: true,
+        reminders: [
+          { method: 'popup', minutes: 1440 }, // 하루 전
+          { method: 'popup', minutes: 60 }    // 1시간 전
+        ]
+      },
+      {
+        type: 'evaluation',
+        daysSinceOperation: 56,
+        title: '8주차 상태 평가',
+        description: '구조화된 운동 단계 완료 후 마라톤 훈련 시작 가능 여부 평가',
+        duration: 60,
+        location: '병원',
+        isRequired: true,
+        reminders: [
+          { method: 'popup', minutes: 1440 }, // 하루 전
+          { method: 'popup', minutes: 60 }    // 1시간 전
+        ]
+      },
+      {
+        type: 'scan',
+        daysSinceOperation: 84,
+        title: '최종 듀플렉스 스캔',
+        description: '마라톤 참가 전 최종 혈관 상태 확인 및 승인',
+        duration: 60,
+        location: '병원',
+        isRequired: true,
+        reminders: [
+          { method: 'popup', minutes: 1440 }, // 하루 전
+          { method: 'popup', minutes: 60 }    // 1시간 전
+        ]
+      }
+    ];
+  }
+
+  /**
+   * 날짜 계산 유틸리티
+   */
+  private addDaysToDate(date: Date, days: number): Date {
+    const result = new Date(date);
+    result.setDate(result.getDate() + days);
+    return result;
+  }
+
+  /**
+   * 시간 문자열을 Date 객체로 변환
+   */
+  private createDateTime(date: Date, timeString: string): string {
+    const [hours, minutes] = timeString.split(':').map(Number);
+    const dateTime = new Date(date);
+    dateTime.setHours(hours, minutes, 0, 0);
+    return dateTime.toISOString();
+  }
+
+  /**
+   * 훈련 일정 생성
+   */
+  async createTrainingSchedule(request: BulkEventCreationRequest): Promise<CalendarServiceResponse<CalendarEventOutput[]>> {
+    try {
+      const operationDate = new Date(request.operationDate);
+      const templates = this.getTrainingTemplates();
+      const medicalTemplates = this.getMedicalTemplates();
+      const createdEvents: CalendarEventOutput[] = [];
+
+      // 훈련 일정 생성
+      for (const template of templates) {
+        // 현재 수술 후 일수보다 미래 일정만 생성
+        if (template.daysSinceOperation >= request.currentDaysSinceOperation) {
+          const eventDate = this.addDaysToDate(operationDate, template.daysSinceOperation);
+          
+          // 주말 제외 옵션 확인
+          if (!request.includeWeekends && (eventDate.getDay() === 0 || eventDate.getDay() === 6)) {
+            continue;
+          }
+
+          const startDateTime = this.createDateTime(eventDate, request.trainingTime);
+          const endDateTime = this.createDateTime(eventDate, 
+            this.addMinutesToTime(request.trainingTime, template.duration));
+
+          const eventData: CalendarEventInput = {
+            title: template.title,
+            description: this.formatTrainingDescription(template),
+            startDateTime: startDateTime,
+            endDateTime: endDateTime,
+            location: this.getLocationForPhase(template.phase, request.location),
+            calendarId: request.calendarId,
+            reminders: {
+              useDefault: false,
+              overrides: [
+                { method: 'popup', minutes: 30 }
+              ]
+            }
+          };
+
+          const result = await this.calendarConnector.createEvent(eventData);
+          if (result.success && result.data) {
+            createdEvents.push(result.data);
+            log.info(`Created training event: ${template.title} on ${eventDate.toDateString()}`);
+          } else {
+            log.error(`Failed to create training event: ${template.title}`, result.error);
+          }
+        }
+      }
+
+      // 의료 일정 생성
+      if (request.includeMedicalSchedule) {
+        for (const template of medicalTemplates) {
+          if (template.daysSinceOperation >= request.currentDaysSinceOperation) {
+            const eventDate = this.addDaysToDate(operationDate, template.daysSinceOperation);
+            const startDateTime = this.createDateTime(eventDate, '14:00'); // 오후 2시 기본
+            const endDateTime = this.createDateTime(eventDate, 
+              this.addMinutesToTime('14:00', template.duration));
+
+            const eventData: CalendarEventInput = {
+              title: template.title,
+              description: template.description,
+              startDateTime: startDateTime,
+              endDateTime: endDateTime,
+              location: request.location.hospital || template.location,
+              calendarId: request.calendarId,
+              reminders: {
+                useDefault: false,
+                overrides: template.reminders
+              }
+            };
+
+            const result = await this.calendarConnector.createEvent(eventData);
+            if (result.success && result.data) {
+              createdEvents.push(result.data);
+              log.info(`Created medical event: ${template.title} on ${eventDate.toDateString()}`);
+            } else {
+              log.error(`Failed to create medical event: ${template.title}`, result.error);
+            }
+          }
+        }
+      }
+
+      return {
+        success: true,
+        data: createdEvents
+      };
+    } catch (error) {
+      log.error('Failed to create training schedule', error);
+      return {
+        success: false,
+        error: {
+          code: 'SCHEDULE_CREATE_FAILED',
+          message: 'Failed to create training schedule',
+          details: error
+        }
+      };
+    }
+  }
+
+  /**
+   * 훈련 설명 포맷팅
+   */
+  private formatTrainingDescription(template: TrainingScheduleTemplate): string {
+    let description = `📅 수술 후 ${template.daysSinceOperation}일째 - ${template.phase} 단계\n\n`;
+    description += `🏃‍♂️ 운동 내용:\n`;
+    template.activities.forEach(activity => {
+      description += `• ${activity}\n`;
+    });
+    description += `\n📝 주의사항: ${template.notes}\n\n`;
+    description += `✅ 체크포인트:\n`;
+    template.checkpoints.forEach(checkpoint => {
+      description += `• ${checkpoint}\n`;
+    });
+    
+    if (template.isImportantMilestone) {
+      description += `\n⭐ 중요 마일스톤: 이 단계 완료 후 다음 단계 진행 가능\n`;
+    }
+    
+    description += `\n⚠️ 안전 수칙: 몸 상태 변화 시 즉시 운동 중단하고 의료진 상담`;
+    
+    return description;
+  }
+
+  /**
+   * 단계별 운동 장소 결정
+   */
+  private getLocationForPhase(phase: string, locations: BulkEventCreationRequest['location']): string {
+    switch (phase) {
+      case '저충격유산소':
+      case '조깅도입':
+        return locations.gym || '헬스장';
+      case '연속달리기':
+      case '구조화운동':
+      case '마라톤훈련':
+        return locations.park || '공원';
+      default:
+        return locations.gym || '헬스장';
+    }
+  }
+
+  /**
+   * 시간에 분 추가
+   */
+  private addMinutesToTime(timeString: string, minutes: number): string {
+    const [hours, mins] = timeString.split(':').map(Number);
+    const totalMinutes = hours * 60 + mins + minutes;
+    const newHours = Math.floor(totalMinutes / 60) % 24;
+    const newMins = totalMinutes % 60;
+    return `${newHours.toString().padStart(2, '0')}:${newMins.toString().padStart(2, '0')}`;
+  }
+
+  /**
+   * 특정 날짜의 훈련 일정 조회
+   */
+  async getTrainingScheduleForDate(date: string, calendarId?: string): Promise<CalendarServiceResponse<CalendarEventOutput[]>> {
+    const startOfDay = new Date(date);
+    startOfDay.setHours(0, 0, 0, 0);
+    
+    const endOfDay = new Date(date);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    return await this.calendarConnector.getEvents({
+      calendarId: calendarId,
+      timeMin: startOfDay.toISOString(),
+      timeMax: endOfDay.toISOString(),
+      query: 'ClariVein',
+      orderBy: 'startTime'
+    });
+  }
+
+  /**
+   * 훈련 일정 완료 표시
+   */
+  async markTrainingComplete(eventId: string, notes?: string, calendarId: string = 'primary'): Promise<CalendarServiceResponse<CalendarEventOutput>> {
+    try {
+      // 이벤트 조회
+      const events = await this.calendarConnector.getEvents({
+        calendarId: calendarId,
+        maxResults: 1
+      });
+
+      if (!events.success || !events.data) {
+        return {
+          success: false,
+          error: {
+            code: 'EVENT_NOT_FOUND',
+            message: 'Event not found'
+          }
+        };
+      }
+
+      const event = events.data.find(e => e.id === eventId);
+      if (!event) {
+        return {
+          success: false,
+          error: {
+            code: 'EVENT_NOT_FOUND',
+            message: 'Event not found'
+          }
+        };
+      }
+
+      // 제목에 완료 표시 추가
+      const updatedTitle = event.title.startsWith('✅') ? event.title : `✅ ${event.title}`;
+      
+      // 설명에 완료 노트 추가
+      let updatedDescription = event.description || '';
+      if (notes) {
+        updatedDescription += `\n\n📝 완료 노트 (${new Date().toLocaleDateString()}):\n${notes}`;
+      }
+
+      return await this.calendarConnector.updateEvent(eventId, {
+        title: updatedTitle,
+        description: updatedDescription
+      }, calendarId);
+    } catch (error) {
+      log.error('Failed to mark training complete', error);
+      return {
+        success: false,
+        error: {
+          code: 'MARK_COMPLETE_FAILED',
+          message: 'Failed to mark training as complete',
+          details: error
+        }
+      };
+    }
+  }
+} 
