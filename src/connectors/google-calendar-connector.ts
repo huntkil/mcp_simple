@@ -1,0 +1,429 @@
+import { google } from 'googleapis';
+import { OAuth2Client } from 'google-auth-library';
+import { 
+  GoogleCalendarConfig, 
+  CalendarEventInput, 
+  CalendarEventOutput, 
+  CalendarListItem,
+  CalendarServiceResponse,
+  AuthStatus,
+  EventSearchFilter,
+  CreateCalendarRequest
+} from '../types/google-calendar-types';
+import { log } from '../utils/logger';
+
+export class GoogleCalendarConnector {
+  private oauth2Client: OAuth2Client;
+  private calendar: any;
+  private config: GoogleCalendarConfig;
+
+  constructor(config: GoogleCalendarConfig) {
+    this.config = config;
+    this.oauth2Client = new google.auth.OAuth2(
+      config.clientId,
+      config.clientSecret,
+      config.redirectUri
+    );
+
+    // 토큰이 있으면 설정
+    if (config.accessToken && config.refreshToken) {
+      this.oauth2Client.setCredentials({
+        access_token: config.accessToken,
+        refresh_token: config.refreshToken
+      });
+    }
+
+    this.calendar = google.calendar({ version: 'v3', auth: this.oauth2Client });
+  }
+
+  /**
+   * OAuth2 인증 URL 생성
+   */
+  generateAuthUrl(): string {
+    const scopes = [
+      'https://www.googleapis.com/auth/calendar',
+      'https://www.googleapis.com/auth/calendar.events'
+    ];
+
+    return this.oauth2Client.generateAuthUrl({
+      access_type: 'offline',
+      scope: scopes,
+      prompt: 'consent'
+    });
+  }
+
+  /**
+   * 인증 코드로 토큰 교환
+   */
+  async exchangeCodeForTokens(code: string): Promise<CalendarServiceResponse<any>> {
+    try {
+      const { tokens } = await this.oauth2Client.getToken(code);
+      this.oauth2Client.setCredentials(tokens);
+      
+      // 설정 업데이트
+      this.config.accessToken = tokens.access_token || undefined;
+      this.config.refreshToken = tokens.refresh_token || undefined;
+
+      log.info('Google Calendar authentication successful');
+      
+      return {
+        success: true,
+        data: {
+          accessToken: tokens.access_token,
+          refreshToken: tokens.refresh_token,
+          expiryDate: tokens.expiry_date
+        }
+      };
+    } catch (error) {
+      log.error('Failed to exchange code for tokens', error);
+      return {
+        success: false,
+        error: {
+          code: 'AUTH_FAILED',
+          message: 'Failed to authenticate with Google Calendar',
+          details: error
+        }
+      };
+    }
+  }
+
+  /**
+   * 인증 상태 확인
+   */
+  async getAuthStatus(): Promise<CalendarServiceResponse<AuthStatus>> {
+    try {
+      const credentials = this.oauth2Client.credentials;
+      
+      if (!credentials.access_token) {
+        return {
+          success: true,
+          data: {
+            isAuthenticated: false,
+            scopes: []
+          }
+        };
+      }
+
+      // 토큰 유효성 검증
+      const tokenInfo = await this.oauth2Client.getTokenInfo(credentials.access_token);
+      
+      return {
+        success: true,
+        data: {
+          isAuthenticated: true,
+          userEmail: tokenInfo.email,
+          tokenExpiresAt: new Date(credentials.expiry_date || 0).toISOString(),
+          scopes: tokenInfo.scopes || []
+        }
+      };
+    } catch (error) {
+      log.error('Failed to get auth status', error);
+      return {
+        success: false,
+        error: {
+          code: 'AUTH_CHECK_FAILED',
+          message: 'Failed to check authentication status',
+          details: error
+        }
+      };
+    }
+  }
+
+  /**
+   * 캘린더 목록 조회
+   */
+  async getCalendarList(): Promise<CalendarServiceResponse<CalendarListItem[]>> {
+    try {
+      const response = await this.calendar.calendarList.list();
+      const calendars = response.data.items || [];
+      
+      const calendarList: CalendarListItem[] = calendars.map(cal => ({
+        id: cal.id || '',
+        summary: cal.summary || '',
+        description: cal.description,
+        primary: cal.primary,
+        accessRole: cal.accessRole || '',
+        backgroundColor: cal.backgroundColor,
+        foregroundColor: cal.foregroundColor
+      }));
+
+      return {
+        success: true,
+        data: calendarList
+      };
+    } catch (error) {
+      log.error('Failed to get calendar list', error);
+      return {
+        success: false,
+        error: {
+          code: 'CALENDAR_LIST_FAILED',
+          message: 'Failed to retrieve calendar list',
+          details: error
+        }
+      };
+    }
+  }
+
+  /**
+   * 새 캘린더 생성
+   */
+  async createCalendar(request: CreateCalendarRequest): Promise<CalendarServiceResponse<CalendarListItem>> {
+    try {
+      const calendarResource = {
+        summary: request.summary,
+        description: request.description,
+        timeZone: request.timeZone || 'Asia/Seoul'
+      };
+
+      const response = await this.calendar.calendars.insert({
+        requestBody: calendarResource
+      });
+
+      const createdCalendar = response.data;
+      
+      return {
+        success: true,
+        data: {
+          id: createdCalendar.id || '',
+          summary: createdCalendar.summary || '',
+          description: createdCalendar.description,
+          primary: false,
+          accessRole: 'owner',
+          backgroundColor: request.backgroundColor,
+          foregroundColor: request.foregroundColor
+        }
+      };
+    } catch (error) {
+      log.error('Failed to create calendar', error);
+      return {
+        success: false,
+        error: {
+          code: 'CALENDAR_CREATE_FAILED',
+          message: 'Failed to create calendar',
+          details: error
+        }
+      };
+    }
+  }
+
+  /**
+   * 이벤트 생성
+   */
+  async createEvent(eventData: CalendarEventInput): Promise<CalendarServiceResponse<CalendarEventOutput>> {
+    try {
+      const calendarId = eventData.calendarId || 'primary';
+      
+      const event = {
+        summary: eventData.title,
+        description: eventData.description,
+        location: eventData.location,
+        start: {
+          dateTime: eventData.startDateTime,
+          timeZone: 'Asia/Seoul'
+        },
+        end: {
+          dateTime: eventData.endDateTime,
+          timeZone: 'Asia/Seoul'
+        },
+        attendees: eventData.attendees?.map(email => ({ email })),
+        reminders: eventData.reminders,
+        recurrence: eventData.recurrence
+      };
+
+      const response = await this.calendar.events.insert({
+        calendarId: calendarId,
+        requestBody: event
+      });
+
+      const createdEvent = response.data;
+      
+      return {
+        success: true,
+        data: {
+          id: createdEvent.id || '',
+          title: createdEvent.summary || '',
+          description: createdEvent.description,
+          startDateTime: createdEvent.start?.dateTime || '',
+          endDateTime: createdEvent.end?.dateTime || '',
+          location: createdEvent.location,
+          htmlLink: createdEvent.htmlLink || '',
+          status: createdEvent.status || '',
+          created: createdEvent.created || '',
+          updated: createdEvent.updated || ''
+        }
+      };
+    } catch (error) {
+      log.error('Failed to create event', error);
+      return {
+        success: false,
+        error: {
+          code: 'EVENT_CREATE_FAILED',
+          message: 'Failed to create calendar event',
+          details: error
+        }
+      };
+    }
+  }
+
+  /**
+   * 이벤트 목록 조회
+   */
+  async getEvents(filter: EventSearchFilter = {}): Promise<CalendarServiceResponse<CalendarEventOutput[]>> {
+    try {
+      const calendarId = filter.calendarId || 'primary';
+      
+      const response = await this.calendar.events.list({
+        calendarId: calendarId,
+        timeMin: filter.timeMin,
+        timeMax: filter.timeMax,
+        q: filter.query,
+        maxResults: filter.maxResults || 50,
+        orderBy: filter.orderBy || 'startTime',
+        singleEvents: true
+      });
+
+      const events = response.data.items || [];
+      
+      const eventList: CalendarEventOutput[] = events.map(event => ({
+        id: event.id || '',
+        title: event.summary || '',
+        description: event.description,
+        startDateTime: event.start?.dateTime || event.start?.date || '',
+        endDateTime: event.end?.dateTime || event.end?.date || '',
+        location: event.location,
+        htmlLink: event.htmlLink || '',
+        status: event.status || '',
+        created: event.created || '',
+        updated: event.updated || ''
+      }));
+
+      return {
+        success: true,
+        data: eventList
+      };
+    } catch (error) {
+      log.error('Failed to get events', error);
+      return {
+        success: false,
+        error: {
+          code: 'EVENTS_GET_FAILED',
+          message: 'Failed to retrieve calendar events',
+          details: error
+        }
+      };
+    }
+  }
+
+  /**
+   * 이벤트 업데이트
+   */
+  async updateEvent(eventId: string, eventData: Partial<CalendarEventInput>, calendarId: string = 'primary'): Promise<CalendarServiceResponse<CalendarEventOutput>> {
+    try {
+      const event = {
+        summary: eventData.title,
+        description: eventData.description,
+        location: eventData.location,
+        start: eventData.startDateTime ? {
+          dateTime: eventData.startDateTime,
+          timeZone: 'Asia/Seoul'
+        } : undefined,
+        end: eventData.endDateTime ? {
+          dateTime: eventData.endDateTime,
+          timeZone: 'Asia/Seoul'
+        } : undefined,
+        reminders: eventData.reminders
+      };
+
+      const response = await this.calendar.events.patch({
+        calendarId: calendarId,
+        eventId: eventId,
+        requestBody: event
+      });
+
+      const updatedEvent = response.data;
+      
+      return {
+        success: true,
+        data: {
+          id: updatedEvent.id || '',
+          title: updatedEvent.summary || '',
+          description: updatedEvent.description,
+          startDateTime: updatedEvent.start?.dateTime || '',
+          endDateTime: updatedEvent.end?.dateTime || '',
+          location: updatedEvent.location,
+          htmlLink: updatedEvent.htmlLink || '',
+          status: updatedEvent.status || '',
+          created: updatedEvent.created || '',
+          updated: updatedEvent.updated || ''
+        }
+      };
+    } catch (error) {
+      log.error('Failed to update event', error);
+      return {
+        success: false,
+        error: {
+          code: 'EVENT_UPDATE_FAILED',
+          message: 'Failed to update calendar event',
+          details: error
+        }
+      };
+    }
+  }
+
+  /**
+   * 이벤트 삭제
+   */
+  async deleteEvent(eventId: string, calendarId: string = 'primary'): Promise<CalendarServiceResponse<boolean>> {
+    try {
+      await this.calendar.events.delete({
+        calendarId: calendarId,
+        eventId: eventId
+      });
+
+      return {
+        success: true,
+        data: true
+      };
+    } catch (error) {
+      log.error('Failed to delete event', error);
+      return {
+        success: false,
+        error: {
+          code: 'EVENT_DELETE_FAILED',
+          message: 'Failed to delete calendar event',
+          details: error
+        }
+      };
+    }
+  }
+
+  /**
+   * 토큰 새로고침
+   */
+  async refreshAccessToken(): Promise<CalendarServiceResponse<any>> {
+    try {
+      const { credentials } = await this.oauth2Client.refreshAccessToken();
+      this.oauth2Client.setCredentials(credentials);
+      
+      this.config.accessToken = credentials.access_token || undefined;
+      
+      return {
+        success: true,
+        data: {
+          accessToken: credentials.access_token,
+          expiryDate: credentials.expiry_date
+        }
+      };
+    } catch (error) {
+      log.error('Failed to refresh access token', error);
+      return {
+        success: false,
+        error: {
+          code: 'TOKEN_REFRESH_FAILED',
+          message: 'Failed to refresh access token',
+          details: error
+        }
+      };
+    }
+  }
+} 

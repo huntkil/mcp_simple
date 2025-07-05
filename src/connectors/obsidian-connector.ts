@@ -17,7 +17,6 @@ import {
 } from '../utils/markdown-parser';
 import { FileWatcher, FileWatcherOptions } from '../utils/file-watcher';
 import { log } from '../utils/logger';
-import * as configData from '../../config/database-config.json';
 
 export class ObsidianConnector {
   private config: ObsidianConfig;
@@ -899,7 +898,13 @@ ${updatedNote.content}`;
 }
 
 export function loadObsidianConfigFromFile(): ObsidianConfig {
-  const obsidianConfig = (configData as any).obsidian;
+  const fs = require('fs');
+  const path = require('path');
+  
+  const configPath = path.join(__dirname, '../../config/server-config.json');
+  const serverConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  const obsidianConfig = serverConfig.obsidian;
+  
   return {
     vaultPath: obsidianConfig.vaultPath,
     ignorePatterns: obsidianConfig.ignorePatterns || ['.DS_Store', 'node_modules', '.git'],

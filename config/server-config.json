@@ -1,6 +1,6 @@
 {
   "server": {
-    "port": 4000,
+    "port": 8000,
     "host": "localhost",
     "logLevel": "info",
     "cors": {
@@ -9,7 +9,7 @@
     }
   },
   "obsidian": {
-    "vaultPath": "",
+    "vaultPath": "C:\\Users\\huntk\\Documents\\ObsidianVault",
     "watchForChanges": true,
     "ignorePatterns": [
       ".obsidian/**",

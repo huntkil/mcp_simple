@@ -1,5 +1,7 @@
 import express from 'express';
 import { log } from '../utils/logger';
+import * as fs from 'fs';
+import * as path from 'path';
 
 const router = express.Router();
 
@@ -7,11 +9,70 @@ const router = express.Router();
 let accessToken: string | null = null;
 let refreshToken: string | null = null;
 
+// 토큰 파일 경로 정의
+const tokenFilePath = path.join(process.cwd(), 'config', 'credentials', 'google-calendar-tokens.json');
+
+// 저장된 토큰을 로드합니다.
+function loadTokensFromFile() {
+  try {
+    if (fs.existsSync(tokenFilePath)) {
+      const raw = fs.readFileSync(tokenFilePath, 'utf-8');
+      const saved = JSON.parse(raw);
+      accessToken = saved.accessToken || saved.access_token || null;
+      refreshToken = saved.refreshToken || saved.refresh_token || null;
+      if (accessToken) {
+        log.info('Loaded Google Calendar tokens from file');
+      }
+    }
+  } catch (err) {
+    log.warn('Failed to load Google Calendar tokens', err);
+  }
+}
+
+// 토큰을 파일로 저장합니다.
+function saveTokensToFile(tokens: any) {
+  try {
+    const data = {
+      accessToken: tokens.access_token || tokens.accessToken,
+      refreshToken: tokens.refresh_token || tokens.refreshToken,
+      expiryDate: tokens.expiry_date || tokens.expiryDate
+    };
+    fs.writeFileSync(tokenFilePath, JSON.stringify(data, null, 2), 'utf-8');
+    log.info('Saved Google Calendar tokens to file');
+  } catch (err) {
+    log.error('Failed to save Google Calendar tokens', err);
+  }
+}
+
+// 모듈 로드 시 토큰을 읽어옵니다.
+loadTokensFromFile();
+
 // Google Calendar 설정 로드
 function loadCalendarConfig() {
   try {
     const fs = require('fs');
     const path = require('path');
+    
+    // 먼저 credentials 파일에서 로드 시도
+    const credentialsPath = path.join(process.cwd(), 'config', 'credentials', 'google-calendar.json');
+    if (fs.existsSync(credentialsPath)) {
+      const credentialsData = fs.readFileSync(credentialsPath, 'utf8');
+      const credentials = JSON.parse(credentialsData);
+      
+      // server-config.json에서 추가 설정 로드
+      const configPath = path.join(process.cwd(), 'config', 'server-config.json');
+      const configData = fs.readFileSync(configPath, 'utf8');
+      const config = JSON.parse(configData);
+      
+      return {
+        ...config.googleCalendar,
+        clientId: credentials.clientId,
+        clientSecret: credentials.clientSecret,
+        redirectUri: credentials.redirectUri
+      };
+    }
+    
+    // fallback: server-config.json에서 로드
     const configPath = path.join(process.cwd(), 'config', 'server-config.json');
     const configData = fs.readFileSync(configPath, 'utf8');
     const config = JSON.parse(configData);
@@ -87,6 +148,9 @@ async function exchangeCodeForTokens(authCode: string) {
   const tokens = await response.json();
   accessToken = tokens.access_token;
   refreshToken = tokens.refresh_token;
+  
+  // 새로 발급받은 토큰을 파일에 저장합니다.
+  saveTokensToFile(tokens);
   
   return tokens;
 }
@@ -190,6 +254,47 @@ router.get('/auth/callback', async (req, res) => {
     res.status(500).json({
       success: false,
       error: '토큰 교환에 실패했습니다.',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// 오늘(현지 날짜 기준) 일정 조회
+router.get('/events/today', async (req, res) => {
+  try {
+    if (!accessToken) {
+      return res.status(401).json({
+        success: false,
+        error: '인증이 필요합니다.',
+        message: '먼저 Google Calendar 인증을 완료하세요.'
+      });
+    }
+
+    const calendarId = (req.query.calendarId as string) || 'primary';
+
+    // 현지 시간(서버) 기준 오늘의 시작과 끝 ISO 문자열 계산
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+    const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+
+    const timeMin = startOfDay.toISOString();
+    const timeMax = endOfDay.toISOString();
+
+    const eventsResponse = await makeCalendarAPIRequest(
+      `/calendars/${encodeURIComponent(calendarId)}/events?timeMin=${timeMin}&timeMax=${timeMax}&singleEvents=true&orderBy=startTime`
+    );
+
+    res.json({
+      success: true,
+      data: eventsResponse.items || [],
+      count: (eventsResponse.items || []).length
+    });
+
+  } catch (error) {
+    log.error('Failed to fetch today events', error);
+    res.status(500).json({
+      success: false,
+      error: '오늘 일정 조회에 실패했습니다.',
       details: error instanceof Error ? error.message : 'Unknown error'
     });
   }

@@ -77,7 +77,7 @@ npm install
 ```json
 {
   "server": {
-    "port": 4000,
+    "port": 8000,
     "host": "localhost",
     "logLevel": "info"
   },
@@ -96,7 +96,7 @@ npm install
   "googleCalendar": {
     "clientId": "YOUR_GOOGLE_CLIENT_ID",
     "clientSecret": "YOUR_GOOGLE_CLIENT_SECRET",
-    "redirectUri": "http://localhost:4000/auth/google/callback",
+    "redirectUri": "http://localhost:8000/auth/google/callback",
     "defaultTrainingTime": "07:00",
     "defaultLocations": {
       "gym": "헬스장",
@@ -127,12 +127,12 @@ npm start
 
 ### 헬스 체크
 ```bash
-GET http://localhost:4000/health
+GET http://localhost:8000/health
 ```
 
 ### MCP 엔드포인트
 ```bash
-POST http://localhost:4000/mcp
+POST http://localhost:8000/mcp
 Content-Type: application/json
 
 {
@@ -146,10 +146,10 @@ Content-Type: application/json
 ### Google Calendar API 엔드포인트
 ```bash
 # 인증 URL 생성
-GET http://localhost:4000/api/calendar/auth/url
+GET http://localhost:8000/api/calendar/auth/url
 
 # 훈련 일정 생성
-POST http://localhost:4000/api/calendar/training/schedule
+POST http://localhost:8000/api/calendar/training/schedule
 Content-Type: application/json
 
 {
