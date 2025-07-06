@@ -4,6 +4,7 @@ import { ObsidianConnector, loadObsidianConfigFromFile } from '../connectors/obs
 import { AIService } from '../services/ai-service';
 import { SmartFeaturesService } from '../services/smart-features-service';
 import { GoogleCalendarConnector } from '../connectors/google-calendar-connector';
+import { createSafeFileName } from '../utils/markdown-parser';
 
 // MCP 에러 코드 정의
 export const MCPErrorCodes = {
@@ -114,7 +115,7 @@ const smartFeaturesService = new SmartFeaturesService();
 const googleCalendarConnector = new GoogleCalendarConnector(loadGoogleCalendarConfig());
 
 // 초기화 함수
-async function initializeConnectors() {
+export async function initializeConnectors() {
   try {
     await obsidianConnector.initialize();
     log.info('All connectors initialized successfully');
@@ -260,86 +261,245 @@ export async function handleGetRecentNotes(params: any): Promise<any> {
 export async function handleSearchNotes(params: any): Promise<any> {
   const { query, limit = 20, filters } = params;
   
+  // 기본 검증
   if (!query || typeof query !== 'string') {
     throw new Error('Query parameter is required and must be a string');
   }
-
-  // Obsidian 검색
-  const obsidianResults = await obsidianConnector.searchNotes(query, limit);
   
-  // 결과 변환
-  const results = [];
-  
-  // Obsidian 결과 추가
-  for (const result of obsidianResults) {
-    results.push({
-      type: 'obsidian',
-      id: result.note.id,
-      title: result.note.title,
-      content: result.note.content.substring(0, 200) + '...',
-      path: result.note.path,
-      tags: result.note.tags,
-      relevance: result.relevance,
-      createdAt: result.note.createdAt,
-      modifiedAt: result.note.modifiedAt
-    });
+  // 쿼리 길이 제한
+  if (query.length > 1000) {
+    throw new Error('Query is too long (maximum 1000 characters)');
   }
   
-  // 관련성 순으로 정렬
-  results.sort((a, b) => b.relevance - a.relevance);
+  // limit 검증
+  const searchLimit = Math.min(Math.max(1, parseInt(limit) || 20), 100);
   
-  return results.slice(0, limit);
+  try {
+    // Obsidian 검색
+    const obsidianResults = await obsidianConnector.searchNotes(query, searchLimit);
+    
+    // 결과 변환 (방어 로직 추가)
+    const results = [];
+    
+    // Obsidian 결과 추가
+    for (const result of obsidianResults) {
+      if (result && result.note) {
+        const note = result.note;
+        const content = note.content || '';
+        const truncatedContent = content.length > 200 ? content.substring(0, 200) + '...' : content;
+        
+        results.push({
+          type: 'obsidian',
+          id: note.id || 'unknown',
+          title: note.title || 'Untitled',
+          content: truncatedContent,
+          path: note.path || '',
+          tags: Array.isArray(note.tags) ? note.tags : [],
+          relevance: typeof result.relevance === 'number' ? result.relevance : 0,
+          createdAt: note.createdAt || new Date().toISOString(),
+          modifiedAt: note.modifiedAt || new Date().toISOString()
+        });
+      }
+    }
+    
+    // 관련성 순으로 정렬
+    results.sort((a, b) => (b.relevance || 0) - (a.relevance || 0));
+    
+    return results.slice(0, searchLimit);
+  } catch (error) {
+    log.error(`Search failed for query: ${query}`, error);
+    throw new Error(`Search failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
 }
 
 // 노트 조회 핸들러
 export async function handleGetNote(params: any): Promise<any> {
   const { id, type = 'obsidian' } = params;
   
+  // 기본 검증
   if (!id) {
     throw new Error('Note ID is required');
   }
   
+  // 타입 검증
+  if (typeof id !== 'string') {
+    throw new Error('Note ID must be a string');
+  }
+  
   if (type === 'obsidian') {
-    const note = await obsidianConnector.getNote(id);
-    if (!note) return null;
-    
-    return {
-      type: 'obsidian',
-      id: note.id,
-      title: note.title,
-      content: note.content,
-      path: note.path,
-      tags: note.tags,
-      links: note.links,
-      backlinks: note.backlinks,
-      createdAt: note.createdAt,
-      modifiedAt: note.modifiedAt,
-      frontmatter: note.frontmatter
-    };
+    try {
+      const note = await obsidianConnector.getNote(id);
+      if (!note) return null;
+      
+      // 노트 데이터 방어 로직
+      return {
+        type: 'obsidian',
+        id: note.id || id,
+        title: note.title || 'Untitled',
+        content: note.content || '',
+        path: note.path || '',
+        tags: Array.isArray(note.tags) ? note.tags : [],
+        links: Array.isArray(note.links) ? note.links : [],
+        backlinks: Array.isArray(note.backlinks) ? note.backlinks : [],
+        createdAt: note.createdAt || new Date().toISOString(),
+        modifiedAt: note.modifiedAt || new Date().toISOString(),
+        frontmatter: note.frontmatter || {}
+      };
+    } catch (error) {
+      log.error(`Failed to get note: ${id}`, error);
+      throw new Error(`Failed to retrieve note: ${id}`);
+    }
   }
   
   throw new Error('Invalid type parameter. Must be "obsidian"');
 }
 
-// 노트 생성 핸들러
+// 노트 생성 핸들러 (강화된 검증)
 export async function handleCreateNote(params: any): Promise<any> {
-  const { title, content, tags = [] } = params;
-  
-  if (!title || !content) {
-    throw new Error('Title and content are required');
+  try {
+    // 파라미터 검증 강화
+    if (!params || typeof params !== 'object') {
+      throw new Error('Invalid parameters: params must be an object');
+    }
+
+    const { title, content, tags = [] } = params;
+    
+    // 기본 검증
+    if (!title || !content) {
+      log.error('create_note validation failed:', { title: !!title, content: !!content, params });
+      throw new Error('Title and content are required');
+    }
+    
+    // 타입 검증
+    if (typeof title !== 'string' || typeof content !== 'string') {
+      log.error('create_note type validation failed:', { 
+        titleType: typeof title, 
+        contentType: typeof content 
+      });
+      throw new Error('Title and content must be strings');
+    }
+    
+    // title 방어 로직 강화
+    const trimmedTitle = title.trim();
+    if (!trimmedTitle) {
+      throw new Error('Title cannot be empty or contain only whitespace');
+    }
+    
+    // 숫자만 제목 거부
+    if (/^\d+$/.test(trimmedTitle)) {
+      throw new Error('Title cannot be only numbers');
+    }
+    
+    // 길이 제한 (200자)
+    if (trimmedTitle.length > 200) {
+      throw new Error('Title is too long (maximum 200 characters)');
+    }
+    
+    // 안전한 파일명 생성 (한글 지원)
+    let finalTitle = createSafeFileName(trimmedTitle);
+    
+    // 중복 제목 자동 처리 (개선됨)
+    let suffix = 1;
+    const maxSuffixAttempts = 1000; // 최대 시도 횟수 증가
+    
+    try {
+      const allNotes = await obsidianConnector.getAllNotes();
+      const existingTitles = new Set(
+        allNotes.map(note => String(note.title || '').trim().toLowerCase())
+      );
+      
+      // 이미 존재하는 제목인지 확인
+      if (existingTitles.has(finalTitle.toLowerCase())) {
+        // 중복 제목이면 자동으로 번호 추가
+        while (existingTitles.has(finalTitle.toLowerCase()) && suffix <= maxSuffixAttempts) {
+          finalTitle = `${finalTitle} (${suffix})`;
+          suffix++;
+          
+          if (finalTitle.length > 200) {
+            // 제목이 너무 길어지면 원본 제목을 유지하고 타임스탬프 추가
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+            finalTitle = `${finalTitle} ${timestamp}`;
+            break;
+          }
+        }
+        
+        if (suffix > maxSuffixAttempts) {
+          // 최대 시도 횟수를 초과하면 타임스탬프 추가
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+          finalTitle = `${finalTitle} ${timestamp}`;
+        }
+      }
+    } catch (error) {
+      log.error('Error checking for duplicate titles:', error);
+      // 중복 확인에 실패해도 계속 진행 (타임스탬프 추가)
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      finalTitle = `${finalTitle} ${timestamp}`;
+    }
+    
+    // content 검증
+    if (typeof content !== 'string' || content.length === 0) {
+      throw new Error('Content must be a non-empty string');
+    }
+    
+    // content 길이 제한 (10MB)
+    if (content.length > 10 * 1024 * 1024) {
+      throw new Error('Content is too large (max 10MB)');
+    }
+    
+    // tags 검증
+    if (tags && !Array.isArray(tags)) {
+      throw new Error('Tags must be an array');
+    }
+    
+    // tags 개별 검증
+    if (Array.isArray(tags)) {
+      for (let i = 0; i < tags.length; i++) {
+        const tag = tags[i];
+        if (typeof tag !== 'string') {
+          throw new Error(`Tag at index ${i} must be a string`);
+        }
+        if (tag.trim().length === 0) {
+          throw new Error(`Tag at index ${i} cannot be empty`);
+        }
+        if (tag.length > 50) {
+          throw new Error(`Tag at index ${i} is too long (max 50 characters)`);
+        }
+      }
+    }
+
+    log.info(`Attempting to create note with title: "${finalTitle}"`);
+
+    // 노트 생성 시도
+    try {
+      const note = await obsidianConnector.createNote(finalTitle, content, tags);
+      log.info(`Successfully created note: ${note.title}`);
+      return note;
+    } catch (createError) {
+      log.error(`Failed to create note: ${finalTitle}`, createError);
+      
+      // 생성 실패 시 재시도 로직
+      if (createError instanceof Error && createError.message.includes('already exists')) {
+        // 파일이 이미 존재하는 경우, 다른 이름으로 재시도
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const retryTitle = `${finalTitle} ${timestamp}`;
+        
+        try {
+          const retryNote = await obsidianConnector.createNote(retryTitle, content, tags);
+          log.info(`Successfully created note with retry title: ${retryNote.title}`);
+          return retryNote;
+        } catch (retryError) {
+          log.error(`Retry failed for note creation: ${retryTitle}`, retryError);
+          throw new Error(`Failed to create note after retry: ${retryError instanceof Error ? retryError.message : 'Unknown error'}`);
+        }
+      }
+      
+      throw new Error(`Failed to create note: ${createError instanceof Error ? createError.message : 'Unknown error'}`);
+    }
+    
+  } catch (error) {
+    log.error('MCP Error in create_note:', error);
+    throw error;
   }
-  
-  const note = await obsidianConnector.createNote(title, content, tags);
-  
-  return {
-    id: note.id,
-    title: note.title,
-    content: note.content,
-    path: note.path,
-    tags: note.tags,
-    createdAt: note.createdAt,
-    modifiedAt: note.modifiedAt
-  };
 }
 
 // 노트 업데이트 핸들러
@@ -888,20 +1048,51 @@ ${event.description || '상세 내용을 여기에 작성하세요.'}
  * 이벤트 분류 - 제목과 설명을 기반으로 카테고리와 우선순위를 자동 분류
  */
 export async function handleClassifyEvent(params: any): Promise<any> {
-  const { eventId } = params || {};
+  const { eventTitle, eventDescription, eventId } = params || {};
   
-  if (!eventId) {
-    throw createMCPError(MCPErrorCodes.INVALID_PARAMS, 'eventId is required');
+  // 파라미터 검증 강화
+  if (!eventTitle && !eventId) {
+    throw createMCPError(MCPErrorCodes.INVALID_PARAMS, 'eventTitle or eventId is required');
+  }
+  if (eventTitle && typeof eventTitle !== 'string') {
+    throw createMCPError(MCPErrorCodes.INVALID_PARAMS, 'eventTitle must be a string');
+  }
+  if (eventDescription && typeof eventDescription !== 'string') {
+    throw createMCPError(MCPErrorCodes.INVALID_PARAMS, 'eventDescription must be a string');
+  }
+  if (eventId && typeof eventId !== 'string') {
+    throw createMCPError(MCPErrorCodes.INVALID_PARAMS, 'eventId must be a string');
   }
 
   try {
-    // 캘린더 이벤트 조회
-    const eventResponse = await googleCalendarConnector.getEvents({ eventId });
-    if (!eventResponse.success || !eventResponse.data || eventResponse.data.length === 0) {
-      throw createMCPError(MCPErrorCodes.INTERNAL_ERROR, 'Failed to retrieve calendar event');
-    }
+    let event: any;
     
-    const event = eventResponse.data[0];
+    if (eventId) {
+      // 캘린더 이벤트 조회
+      const eventResponse = await googleCalendarConnector.getEvents({ eventId });
+      if (!eventResponse.success || !eventResponse.data || eventResponse.data.length === 0) {
+        throw createMCPError(MCPErrorCodes.INTERNAL_ERROR, 'Failed to retrieve calendar event');
+      }
+      event = eventResponse.data[0];
+    } else {
+      // 더미 이벤트 생성 (GoogleCalendarEvent 타입에 맞게)
+      event = {
+        id: 'dummy-event-id',
+        summary: eventTitle || '',
+        description: eventDescription || '',
+        location: '',
+        start: { dateTime: new Date().toISOString() },
+        end: { dateTime: new Date(Date.now() + 3600000).toISOString() },
+        creator: { email: 'dummy@example.com' },
+        attendees: [],
+        status: 'confirmed',
+        htmlLink: '',
+        created: new Date().toISOString(),
+        updated: new Date().toISOString(),
+        iCalUID: 'dummy-uid',
+        sequence: 0
+      };
+    }
     
     // 이벤트 분류 수행
     const classification = await smartFeaturesService.classifyEvent(event);
@@ -909,10 +1100,10 @@ export async function handleClassifyEvent(params: any): Promise<any> {
     return {
       success: true,
       event: {
-        id: event.id,
-        title: event.title,
-        startDateTime: event.startDateTime,
-        endDateTime: event.endDateTime
+        id: event.id || 'dummy-event-id',
+        title: event.summary || eventTitle,
+        startDateTime: event.start?.dateTime || event.startDateTime,
+        endDateTime: event.end?.dateTime || event.endDateTime
       },
       classification
     };
@@ -926,18 +1117,21 @@ export async function handleClassifyEvent(params: any): Promise<any> {
  * 충돌 감지 - 일정 간의 시간 충돌을 감지하고 해결 방안 제시
  */
 export async function handleDetectConflicts(params: any): Promise<any> {
-  const { startDate, endDate, calendarId = 'primary' } = params || {};
+  const { startTime, endTime, startDate, endDate, calendarId = 'primary' } = params || {};
   
-  if (!startDate || !endDate) {
-    throw createMCPError(MCPErrorCodes.INVALID_PARAMS, 'startDate and endDate are required');
+  const timeMin = startTime || startDate;
+  const timeMax = endTime || endDate;
+  
+  if (!timeMin || !timeMax) {
+    throw createMCPError(MCPErrorCodes.INVALID_PARAMS, 'startTime/startDate and endTime/endDate are required');
   }
 
   try {
     // 지정된 기간의 모든 이벤트 조회
     const eventsResponse = await googleCalendarConnector.getEvents({
       calendarId,
-      timeMin: startDate,
-      timeMax: endDate
+      timeMin,
+      timeMax
     });
     
     if (!eventsResponse.success || !eventsResponse.data) {
@@ -951,7 +1145,7 @@ export async function handleDetectConflicts(params: any): Promise<any> {
     
     return {
       success: true,
-      period: { startDate, endDate },
+      period: { startTime: timeMin, endTime: timeMax },
       totalEvents: events.length,
       conflictDetection
     };
@@ -965,32 +1159,30 @@ export async function handleDetectConflicts(params: any): Promise<any> {
  * AI 기반 일정 최적화 추천
  */
 export async function handleGenerateRecommendations(params: any): Promise<any> {
-  const { startDate, endDate, calendarId = 'primary' } = params || {};
+  const { userPreferences, startDate, endDate, calendarId = 'primary' } = params || {};
   
-  if (!startDate || !endDate) {
-    throw createMCPError(MCPErrorCodes.INVALID_PARAMS, 'startDate and endDate are required');
-  }
-
   try {
-    // 지정된 기간의 모든 이벤트 조회
-    const eventsResponse = await googleCalendarConnector.getEvents({
-      calendarId,
-      timeMin: startDate,
-      timeMax: endDate
-    });
+    let events: any[] = [];
     
-    if (!eventsResponse.success || !eventsResponse.data) {
-      throw createMCPError(MCPErrorCodes.INTERNAL_ERROR, 'Failed to retrieve calendar events');
+    if (startDate && endDate) {
+      // 지정된 기간의 모든 이벤트 조회
+      const eventsResponse = await googleCalendarConnector.getEvents({
+        calendarId,
+        timeMin: startDate,
+        timeMax: endDate
+      });
+      
+      if (eventsResponse.success && eventsResponse.data) {
+        events = eventsResponse.data;
+      }
     }
-    
-    const events = eventsResponse.data;
     
     // AI 추천 생성
     const recommendations = await smartFeaturesService.generateRecommendations(events);
     
     return {
       success: true,
-      period: { startDate, endDate },
+      period: startDate && endDate ? { startDate, endDate } : null,
       totalEvents: events.length,
       recommendations
     };
@@ -1004,20 +1196,41 @@ export async function handleGenerateRecommendations(params: any): Promise<any> {
  * 자동 알림 생성
  */
 export async function handleGenerateAutomatedReminders(params: any): Promise<any> {
-  const { eventId } = params || {};
+  const { eventTitle, eventTime, eventId } = params || {};
   
-  if (!eventId) {
-    throw createMCPError(MCPErrorCodes.INVALID_PARAMS, 'eventId is required');
+  if (!eventTitle && !eventId) {
+    throw createMCPError(MCPErrorCodes.INVALID_PARAMS, 'eventTitle or eventId is required');
   }
 
   try {
-    // 캘린더 이벤트 조회
-    const eventResponse = await googleCalendarConnector.getEvents({ eventId });
-    if (!eventResponse.success || !eventResponse.data || eventResponse.data.length === 0) {
-      throw createMCPError(MCPErrorCodes.INTERNAL_ERROR, 'Failed to retrieve calendar event');
-    }
+    let event: any;
     
-    const event = eventResponse.data[0];
+    if (eventId) {
+      // 캘린더 이벤트 조회
+      const eventResponse = await googleCalendarConnector.getEvents({ eventId });
+      if (!eventResponse.success || !eventResponse.data || eventResponse.data.length === 0) {
+        throw createMCPError(MCPErrorCodes.INTERNAL_ERROR, 'Failed to retrieve calendar event');
+      }
+      event = eventResponse.data[0];
+    } else {
+      // 더미 이벤트 생성 (GoogleCalendarEvent 타입에 맞게)
+      event = {
+        id: 'dummy-event-id',
+        summary: eventTitle || '',
+        description: '',
+        location: '',
+        start: { dateTime: eventTime || new Date().toISOString() },
+        end: { dateTime: new Date(new Date(eventTime || Date.now()).getTime() + 3600000).toISOString() },
+        creator: { email: 'dummy@example.com' },
+        attendees: [],
+        status: 'confirmed',
+        htmlLink: '',
+        created: new Date().toISOString(),
+        updated: new Date().toISOString(),
+        iCalUID: 'dummy-uid',
+        sequence: 0
+      };
+    }
     
     // 자동 알림 생성
     const reminders = await smartFeaturesService.generateAutomatedReminders(event);
@@ -1025,10 +1238,10 @@ export async function handleGenerateAutomatedReminders(params: any): Promise<any
     return {
       success: true,
       event: {
-        id: event.id,
-        title: event.title,
-        startDateTime: event.startDateTime,
-        endDateTime: event.endDateTime
+        id: event.id || 'dummy-event-id',
+        title: event.summary || eventTitle,
+        startDateTime: event.start?.dateTime || event.startDateTime,
+        endDateTime: event.end?.dateTime || event.endDateTime
       },
       reminders
     };
@@ -1042,32 +1255,32 @@ export async function handleGenerateAutomatedReminders(params: any): Promise<any
  * 생산성 인사이트 생성
  */
 export async function handleGenerateProductivityInsights(params: any): Promise<any> {
-  const { startDate, endDate, calendarId = 'primary' } = params || {};
+  const { timeRange, focusAreas, startDate, endDate, calendarId = 'primary' } = params || {};
   
-  if (!startDate || !endDate) {
-    throw createMCPError(MCPErrorCodes.INVALID_PARAMS, 'startDate and endDate are required');
-  }
-
   try {
-    // 지정된 기간의 모든 이벤트 조회
-    const eventsResponse = await googleCalendarConnector.getEvents({
-      calendarId,
-      timeMin: startDate,
-      timeMax: endDate
-    });
+    let events: any[] = [];
     
-    if (!eventsResponse.success || !eventsResponse.data) {
-      throw createMCPError(MCPErrorCodes.INTERNAL_ERROR, 'Failed to retrieve calendar events');
+    if (startDate && endDate) {
+      // 지정된 기간의 모든 이벤트 조회
+      const eventsResponse = await googleCalendarConnector.getEvents({
+        calendarId,
+        timeMin: startDate,
+        timeMax: endDate
+      });
+      
+      if (eventsResponse.success && eventsResponse.data) {
+        events = eventsResponse.data;
+      }
     }
-    
-    const events = eventsResponse.data;
     
     // 생산성 인사이트 생성
     const insights = await smartFeaturesService.generateProductivityInsights(events);
     
     return {
       success: true,
-      period: { startDate, endDate },
+      period: startDate && endDate ? { startDate, endDate } : null,
+      timeRange,
+      focusAreas,
       insights
     };
   } catch (error) {

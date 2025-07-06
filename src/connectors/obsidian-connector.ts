@@ -13,7 +13,9 @@ import {
   extractTitle, 
   generateNoteId,
   isValidMarkdownFile,
-  checkFileSize 
+  checkFileSize,
+  normalizeKoreanFileName,
+  createSafeFileName
 } from '../utils/markdown-parser';
 import { FileWatcher, FileWatcherOptions } from '../utils/file-watcher';
 import { log } from '../utils/logger';
@@ -134,11 +136,14 @@ export class ObsidianConnector {
     }
   }
 
-  // 노트 파싱
+  // 노트 파싱 (한글 파일명 지원 개선)
   private async parseNote(filePath: string): Promise<ObsidianNote> {
     const { frontmatter, content } = parseMarkdownFile(filePath);
     const fileName = path.basename(filePath);
-    const title = extractTitle(content, frontmatter, fileName);
+    
+    // 한글 파일명 정규화
+    const normalizedFileName = normalizeKoreanFileName(fileName);
+    const title = extractTitle(content, frontmatter, normalizedFileName);
     const tags = extractTags(content, frontmatter);
     const links = extractLinks(content);
     const id = generateNoteId(filePath);
@@ -149,7 +154,7 @@ export class ObsidianConnector {
       title,
       content,
       path: filePath,
-      fileName,
+      fileName: normalizedFileName, // 정규화된 파일명 사용
       frontmatter,
       tags,
       links,
@@ -178,12 +183,41 @@ export class ObsidianConnector {
     this.fileWatcher.start();
   }
 
-  // 파일 추가 처리
+  // 파일 추가 처리 (MCP API 호출 분리)
   private async handleFileAdd(event: any): Promise<void> {
     if (!isValidMarkdownFile(event.path)) return;
 
     try {
-      log.info(`New note detected: ${event.path}`);
+      // 한글 파일명 정규화
+      const normalizedPath = normalizeKoreanFileName(event.path);
+      log.info(`New note detected: ${normalizedPath}`);
+      
+      // 파일이 실제로 존재하는지 확인
+      if (!fs.existsSync(event.path)) {
+        log.warn(`File does not exist, skipping: ${normalizedPath}`);
+        return;
+      }
+
+      // 파일 크기 확인
+      const stats = fs.statSync(event.path);
+      if (!checkFileSize(event.path, this.config.maxFileSize)) {
+        log.warn(`File too large, skipping: ${normalizedPath}`);
+        return;
+      }
+
+      // 이미 존재하는 노트인지 확인 (더 정확한 검사)
+      const existingNote = this.vault?.notes.find(note => {
+        return note.path === event.path || 
+               note.fileName === path.basename(event.path) ||
+               note.title === path.basename(event.path, '.md');
+      });
+      
+      if (existingNote) {
+        log.debug(`Note already exists, skipping: ${normalizedPath}`);
+        return;
+      }
+
+      // 노트 파싱 및 추가 (MCP API 호출 없이 직접 처리)
       const note = await this.parseNote(event.path);
       
       if (this.vault) {
@@ -191,59 +225,132 @@ export class ObsidianConnector {
       }
       this.notesCache.set(note.id, note);
 
-      // 백링크 업데이트
-      await this.updateBacklinks();
+      log.info(`Successfully added new note: ${note.title} (${normalizedPath})`);
+
+      // 백링크 업데이트 (비동기로 처리)
+      this.updateBacklinks().catch(error => {
+        log.error(`Failed to update backlinks for new note: ${normalizedPath}`, error);
+      });
 
     } catch (error) {
-      log.error(`Failed to handle new file: ${event.path}`, error);
+      log.error(`Failed to handle new file: ${normalizeKoreanFileName(event.path)}`, error);
+      
+      // 에러 발생 시 파일 재시도 로직 (지연 시간 증가)
+      setTimeout(() => {
+        this.retryFileProcessing(event.path, 'add').catch(retryError => {
+          log.error(`Retry failed for file: ${normalizeKoreanFileName(event.path)}`, retryError);
+        });
+      }, 10000); // 10초 후 재시도 (시간 증가)
     }
   }
 
-  // 파일 변경 처리
+  // 파일 변경 처리 (MCP API 호출 분리)
   private async handleFileChange(event: any): Promise<void> {
     if (!isValidMarkdownFile(event.path)) return;
 
     try {
-      log.info(`Note changed: ${event.path}`);
-      const note = await this.parseNote(event.path);
+      const normalizedPath = normalizeKoreanFileName(event.path);
+      log.debug(`File changed: ${normalizedPath}`);
       
-      // 기존 노트 업데이트
-      if (this.vault) {
-        const index = this.vault.notes.findIndex(n => n.path === event.path);
-        if (index !== -1) {
-          this.vault.notes[index] = note;
-        }
+      // 파일이 실제로 존재하는지 확인
+      if (!fs.existsSync(event.path)) {
+        log.warn(`Changed file does not exist, skipping: ${normalizedPath}`);
+        return;
       }
-      this.notesCache.set(note.id, note);
 
-      // 백링크 업데이트
-      await this.updateBacklinks();
+      // 기존 노트 찾기 (더 정확한 검사)
+      const existingNoteIndex = this.vault?.notes.findIndex(note => {
+        return note.path === event.path || 
+               note.fileName === path.basename(event.path) ||
+               note.title === path.basename(event.path, '.md');
+      });
+      
+      if (existingNoteIndex === undefined || existingNoteIndex === -1) {
+        log.debug(`Note not found in vault, treating as new file: ${normalizedPath}`);
+        await this.handleFileAdd(event);
+        return;
+      }
+
+      // 노트 업데이트 (MCP API 호출 없이 직접 처리)
+      const updatedNote = await this.parseNote(event.path);
+      
+      if (this.vault) {
+        this.vault.notes[existingNoteIndex] = updatedNote;
+      }
+      this.notesCache.set(updatedNote.id, updatedNote);
+
+      log.debug(`Successfully updated note: ${updatedNote.title} (${normalizedPath})`);
+
+      // 백링크 업데이트 (비동기로 처리)
+      this.updateBacklinks().catch(error => {
+        log.error(`Failed to update backlinks for changed note: ${normalizedPath}`, error);
+      });
 
     } catch (error) {
-      log.error(`Failed to handle file change: ${event.path}`, error);
+      log.error(`Failed to handle file change: ${normalizeKoreanFileName(event.path)}`, error);
+      
+      // 에러 발생 시 파일 재시도 로직 (지연 시간 증가)
+      setTimeout(() => {
+        this.retryFileProcessing(event.path, 'change').catch(retryError => {
+          log.error(`Retry failed for changed file: ${normalizeKoreanFileName(event.path)}`, retryError);
+        });
+      }, 10000); // 10초 후 재시도 (시간 증가)
     }
   }
 
-  // 파일 삭제 처리
+  // 파일 삭제 처리 (한글 파일명 지원 개선)
   private async handleFileDelete(event: any): Promise<void> {
     if (!isValidMarkdownFile(event.path)) return;
 
     try {
-      log.info(`Note deleted: ${event.path}`);
+      const normalizedPath = normalizeKoreanFileName(event.path);
+      log.debug(`File deleted: ${normalizedPath}`);
       
-      if (this.vault) {
-        this.vault.notes = this.vault.notes.filter(note => note.path !== event.path);
+      // 기존 노트 찾기
+      const existingNoteIndex = this.vault?.notes.findIndex(note => note.path === event.path);
+      if (existingNoteIndex === undefined || existingNoteIndex === -1) {
+        log.debug(`Note not found in vault, skipping deletion: ${normalizedPath}`);
+        return;
       }
 
-      // 캐시에서 제거
-      const noteId = generateNoteId(event.path);
-      this.notesCache.delete(noteId);
+      // 노트 제거
+      if (this.vault) {
+        const removedNote = this.vault.notes.splice(existingNoteIndex, 1)[0];
+        this.notesCache.delete(removedNote.id);
+        log.debug(`Successfully removed note: ${removedNote.title}`);
+      }
 
-      // 백링크 업데이트
-      await this.updateBacklinks();
+      // 백링크 업데이트 (비동기로 처리)
+      this.updateBacklinks().catch(error => {
+        log.error(`Failed to update backlinks after note deletion: ${normalizedPath}`, error);
+      });
 
     } catch (error) {
-      log.error(`Failed to handle file deletion: ${event.path}`, error);
+      log.error(`Failed to handle file deletion: ${normalizeKoreanFileName(event.path)}`, error);
+    }
+  }
+
+  // 파일 처리 재시도 로직 (한글 파일명 지원 개선)
+  private async retryFileProcessing(filePath: string, eventType: 'add' | 'change'): Promise<void> {
+    try {
+      const normalizedPath = normalizeKoreanFileName(filePath);
+      log.info(`Retrying file processing: ${normalizedPath} (${eventType})`);
+      
+      if (!fs.existsSync(filePath)) {
+        log.warn(`File still does not exist during retry: ${normalizedPath}`);
+        return;
+      }
+
+      if (eventType === 'add') {
+        await this.handleFileAdd({ path: filePath });
+      } else if (eventType === 'change') {
+        await this.handleFileChange({ path: filePath });
+      }
+      
+      log.info(`Retry successful for file: ${normalizedPath}`);
+    } catch (error) {
+      log.error(`Retry failed for file: ${normalizeKoreanFileName(filePath)}`, error);
+      throw error;
     }
   }
 
@@ -291,34 +398,40 @@ export class ObsidianConnector {
       let relevance = 0;
       const matchedTerms: string[] = [];
 
-      // 제목 검색
-      if (note.title.toLowerCase().includes(queryLower)) {
+      // 제목 검색 (방어 로직 추가)
+      if (note.title && String(note.title).toLowerCase().includes(queryLower)) {
         relevance += 10;
         matchedTerms.push('title');
       }
 
-      // 태그 검색
-      if (note.tags.some(tag => tag.toLowerCase().includes(queryLower))) {
+      // 태그 검색 (방어 로직 추가)
+      if (note.tags && Array.isArray(note.tags) && note.tags.some(tag => tag && tag.toLowerCase().includes(queryLower))) {
         relevance += 8;
         matchedTerms.push('tags');
       }
 
-      // 콘텐츠 검색
-      if (note.content.toLowerCase().includes(queryLower)) {
+      // 콘텐츠 검색 (방어 로직 추가)
+      if (note.content && note.content.toLowerCase().includes(queryLower)) {
         relevance += 5;
         matchedTerms.push('content');
       }
 
-      // 프론트매터 검색
-      const frontmatterStr = JSON.stringify(note.frontmatter).toLowerCase();
-      if (frontmatterStr.includes(queryLower)) {
-        relevance += 3;
-        matchedTerms.push('frontmatter');
+      // 프론트매터 검색 (방어 로직 추가)
+      if (note.frontmatter) {
+        try {
+          const frontmatterStr = JSON.stringify(note.frontmatter).toLowerCase();
+          if (frontmatterStr.includes(queryLower)) {
+            relevance += 3;
+            matchedTerms.push('frontmatter');
+          }
+        } catch (error) {
+          log.warn(`Failed to stringify frontmatter for note: ${note.path}`, error);
+        }
       }
 
       if (relevance > 0) {
-        // 컨텍스트 추출
-        const context = this.extractContext(note.content, queryLower);
+        // 컨텍스트 추출 (방어 로직 추가)
+        const context = note.content ? this.extractContext(note.content, queryLower) : '';
         
         results.push({
           note,
@@ -337,30 +450,38 @@ export class ObsidianConnector {
 
   // 컨텍스트 추출
   private extractContext(content: string, query: string, contextLength: number = 100): string {
-    const index = content.toLowerCase().indexOf(query);
-    if (index === -1) return '';
+    // 방어 로직 추가
+    if (!content || !query) return '';
+    
+    try {
+      const index = content.toLowerCase().indexOf(query);
+      if (index === -1) return '';
 
-    const start = Math.max(0, index - contextLength / 2);
-    const end = Math.min(content.length, index + query.length + contextLength / 2);
-    
-    let context = content.substring(start, end);
-    
-    // 문장 경계 조정
-    if (start > 0) {
-      const sentenceStart = context.indexOf('.') + 1;
-      if (sentenceStart > 0 && sentenceStart < context.length / 2) {
-        context = context.substring(sentenceStart);
+      const start = Math.max(0, index - contextLength / 2);
+      const end = Math.min(content.length, index + query.length + contextLength / 2);
+      
+      let context = content.substring(start, end);
+      
+      // 문장 경계 조정
+      if (start > 0) {
+        const sentenceStart = context.indexOf('.') + 1;
+        if (sentenceStart > 0 && sentenceStart < context.length / 2) {
+          context = context.substring(sentenceStart);
+        }
       }
-    }
-    
-    if (end < content.length) {
-      const sentenceEnd = context.lastIndexOf('.');
-      if (sentenceEnd > context.length / 2) {
-        context = context.substring(0, sentenceEnd + 1);
+      
+      if (end < content.length) {
+        const sentenceEnd = context.lastIndexOf('.');
+        if (sentenceEnd > context.length / 2) {
+          context = context.substring(0, sentenceEnd + 1);
+        }
       }
-    }
 
-    return context.trim();
+      return context.trim();
+    } catch (error) {
+      log.warn(`Failed to extract context for query: ${query}`, error);
+      return '';
+    }
   }
 
   // 노트 가져오기
@@ -368,48 +489,79 @@ export class ObsidianConnector {
     return this.notesCache.get(id) || null;
   }
 
-  // 노트 생성
+  // 노트 생성 (한글 파일명 지원 개선)
   async createNote(title: string, content: string, tags: string[] = []): Promise<ObsidianNote> {
     if (!this.vault) {
       throw new Error('Vault not initialized');
     }
 
-    const fileName = `${title.replace(/[^a-zA-Z0-9가-힣\s]/g, '')}.md`;
-    const filePath = path.join(this.vault.path, fileName);
-    
-    // 파일이 이미 존재하는지 확인
-    if (fs.existsSync(filePath)) {
-      throw new Error(`Note already exists: ${fileName}`);
+    // 제목 검증 및 정리
+    if (!title || typeof title !== 'string') {
+      throw new Error('Title is required and must be a string');
     }
 
-    // 마크다운 콘텐츠 생성
-    const frontmatter = {
-      title,
-      tags,
-      created: new Date().toISOString()
-    };
+    const cleanTitle = title.trim();
+    if (!cleanTitle) {
+      throw new Error('Title cannot be empty or contain only whitespace');
+    }
 
-    const markdownContent = `---
-title: ${title}
-tags: ${tags.join(', ')}
+    // 안전한 파일명 생성 (한글 지원)
+    const fileName = createSafeFileName(cleanTitle);
+    
+    // 중복 파일명 처리
+    let finalFileName = `${fileName}.md`;
+    let counter = 1;
+    const maxAttempts = 100;
+    
+    while (counter <= maxAttempts) {
+      const filePath = path.join(this.vault.path, finalFileName);
+      
+      if (!fs.existsSync(filePath)) {
+        // 파일이 존재하지 않으면 생성 진행
+        try {
+          // 마크다운 콘텐츠 생성
+          const frontmatter = {
+            title: cleanTitle,
+            tags: Array.isArray(tags) ? tags.filter(tag => typeof tag === 'string' && tag.trim().length > 0) : [],
+            created: new Date().toISOString(),
+            modified: new Date().toISOString()
+          };
+
+          const markdownContent = `---
+title: ${cleanTitle}
+tags: ${frontmatter.tags.join(', ')}
 created: ${frontmatter.created}
+modified: ${frontmatter.modified}
 ---
 
 ${content}`;
 
-    // 파일 작성
-    fs.writeFileSync(filePath, markdownContent, 'utf8');
+          // 파일 작성 (UTF-8 인코딩 명시)
+          fs.writeFileSync(filePath, markdownContent, { encoding: 'utf8', flag: 'w' });
 
-    // 노트 파싱 및 캐시에 추가
-    const note = await this.parseNote(filePath);
-    
-    if (this.vault) {
-      this.vault.notes.push(note);
+          // 노트 파싱 및 캐시에 추가
+          const note = await this.parseNote(filePath);
+          
+          if (this.vault) {
+            this.vault.notes.push(note);
+          }
+          this.notesCache.set(note.id, note);
+
+          log.info(`Created new note: ${filePath}`);
+          return note;
+          
+        } catch (error) {
+          log.error(`Failed to create note file: ${filePath}`, error);
+          throw new Error(`Failed to create note: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+      }
+      
+      // 파일이 존재하면 다른 이름 시도
+      finalFileName = `${fileName} (${counter}).md`;
+      counter++;
     }
-    this.notesCache.set(note.id, note);
-
-    log.info(`Created new note: ${filePath}`);
-    return note;
+    
+    throw new Error(`Could not create note with title "${cleanTitle}" - too many duplicate files exist`);
   }
 
   // 노트 업데이트
@@ -678,7 +830,7 @@ ${updatedNote.content}`;
     }> = [];
 
     const titleGroups = this.vault.notes.reduce((acc, note) => {
-      const normalizedTitle = note.title.toLowerCase().trim();
+      const normalizedTitle = String(note.title).toLowerCase().trim();
       if (!acc[normalizedTitle]) {
         acc[normalizedTitle] = [];
       }
@@ -734,8 +886,8 @@ ${updatedNote.content}`;
       score += commonTags.length * 10;
       
       // 제목 유사도
-      if (note.title.toLowerCase().includes(otherNote.title.toLowerCase()) ||
-          otherNote.title.toLowerCase().includes(note.title.toLowerCase())) {
+      if (String(note.title).toLowerCase().includes(String(otherNote.title).toLowerCase()) ||
+          String(otherNote.title).toLowerCase().includes(String(note.title).toLowerCase())) {
         score += 5;
       }
       
@@ -866,7 +1018,7 @@ ${updatedNote.content}`;
 
     // 중복 제목
     const titleGroups = this.vault.notes.reduce((acc, note) => {
-      const title = note.title.toLowerCase().trim();
+      const title = String(note.title).toLowerCase().trim();
       if (!acc[title]) acc[title] = [];
       acc[title].push(note);
       return acc;

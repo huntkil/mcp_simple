@@ -27,9 +27,9 @@ export class SmartFeaturesService {
    */
   async classifyEvent(event: GoogleCalendarEvent): Promise<EventClassification> {
     try {
-      const title = event.summary?.toLowerCase() || '';
-      const description = event.description?.toLowerCase() || '';
-      const location = event.location?.toLowerCase() || '';
+      const title = (event.summary ?? '').toLowerCase();
+      const description = (event.description ?? '').toLowerCase();
+      const location = (event.location ?? '').toLowerCase();
       
       // 키워드 기반 분류
       const keywords = {
@@ -71,7 +71,7 @@ export class SmartFeaturesService {
       }
 
       // 시간 기반 우선순위 조정
-      if (event.start?.dateTime) {
+      if (event.start && event.start.dateTime) {
         const startTime = new Date(event.start.dateTime);
         const now = new Date();
         const hoursUntil = (startTime.getTime() - now.getTime()) / (1000 * 60 * 60);
@@ -108,7 +108,7 @@ export class SmartFeaturesService {
       const recommendations: string[] = [];
 
       // 시간순으로 정렬
-      const sortedEvents = events.sort((a, b) => {
+      const sortedEvents = events.filter(e => e && e.start && (e.start.dateTime || e.start.date)).sort((a, b) => {
         const aStart = new Date(a.start?.dateTime || a.start?.date || '');
         const bStart = new Date(b.start?.dateTime || b.start?.date || '');
         return aStart.getTime() - bStart.getTime();
@@ -122,7 +122,9 @@ export class SmartFeaturesService {
 
         const currentEnd = new Date(current.end?.dateTime || current.start.dateTime);
         const nextStart = new Date(next.start.dateTime);
-        const timeDiff = (nextStart.getTime() - currentEnd.getTime()) / (1000 * 60); // minutes
+        const timeDiff = (nextStart.getTime() - currentEnd.getTime()) / (1000 * 60);
+
+        if (isNaN(timeDiff)) continue;
 
         if (timeDiff < 0) {
           // 겹치는 일정
@@ -481,19 +483,24 @@ export class SmartFeaturesService {
    * 바쁜 날짜 찾기
    */
   private findBusyDays(events: GoogleCalendarEvent[]): string[] {
+    const busyDays: string[] = [];
     const dayEventCount: { [key: string]: number } = {};
-    
+
     events.forEach(event => {
       if (event.start?.dateTime) {
-        const date = new Date(event.start.dateTime).toISOString().split('T')[0];
+        const date = new Date(event.start.dateTime).toDateString();
         dayEventCount[date] = (dayEventCount[date] || 0) + 1;
       }
     });
 
-    // 하루에 5개 이상의 일정이 있는 날을 바쁜 날로 간주
-    return Object.entries(dayEventCount)
-      .filter(([_, count]) => count >= 5)
-      .map(([date, _]) => date);
+    // 하루에 5개 이상의 이벤트가 있는 날을 바쁜 날로 간주
+    Object.entries(dayEventCount).forEach(([date, count]) => {
+      if (count >= 5) {
+        busyDays.push(date);
+      }
+    });
+
+    return busyDays;
   }
 
   /**
@@ -504,9 +511,9 @@ export class SmartFeaturesService {
   }
 
   /**
-   * 현재 설정 반환
+   * 현재 설정 조회
    */
   getConfig(): SmartFeaturesConfig {
-    return this.config;
+    return { ...this.config };
   }
 } 

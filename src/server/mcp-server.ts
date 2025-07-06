@@ -6,6 +6,9 @@ import { MCPServerConfig } from '../types/mcp-types';
 import calendarDemo from './google-calendar-demo';
 import * as fs from 'fs';
 import * as path from 'path';
+import bodyParser from 'body-parser';
+import { initializeConnectors } from './protocol-handler';
+import * as net from 'net';
 
 // 설정 파일 로드
 function loadConfig(): MCPServerConfig {
@@ -39,14 +42,51 @@ const config = loadConfig();
 configureLogger(config.logLevel);
 
 // 미들웨어 설정
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true }));
+app.use(bodyParser.json({
+  limit: '10mb',
+  strict: true,
+  verify: (req, res, buf) => {
+    try {
+      const str = buf.toString('utf8');
+      // 제어 문자 제거
+      const cleanStr = str.replace(/[\x00-\x1f\x7f-\x9f]/g, '');
+      JSON.parse(cleanStr);
+    } catch (e) {
+      throw new Error('Invalid JSON');
+    }
+  }
+}));
+
+// JSON 파싱 에러 핸들링
+app.use((error: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (error instanceof SyntaxError && error.message.includes('JSON')) {
+    log.error('JSON parsing error:', error);
+    return res.status(400).json({
+      jsonrpc: '2.0',
+      id: null,
+      error: {
+        code: -32700,
+        message: 'Parse error',
+        data: 'Invalid JSON format (check UTF-8 encoding, control characters, and structure)'
+      }
+    });
+  }
+  next(error);
+});
+
+app.use(bodyParser.urlencoded({ extended: true }));
 
 // CORS 설정
 app.use(cors({
   origin: config.host === 'localhost' ? true : config.host,
   credentials: true
 }));
+
+// 모든 응답에 대해 UTF-8 Content-Type 명시
+app.use((req, res, next) => {
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  next();
+});
 
 // 헬스 체크 엔드포인트
 app.get('/health', (req, res) => {
@@ -59,6 +99,171 @@ app.get('/health', (req, res) => {
 
 // Google Calendar 데모 라우터
 app.use('/api/calendar', calendarDemo);
+
+// 포트 사용 가능 여부 확인 함수 (개선됨)
+async function isPortAvailable(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    
+    server.listen(port, () => {
+      server.once('close', () => {
+        resolve(true);
+      });
+      server.close();
+    });
+    
+    server.on('error', () => {
+      resolve(false);
+    });
+  });
+}
+
+// 포트 사용 프로세스 종료 함수 (개선됨)
+async function killProcessOnPort(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const { exec } = require('child_process');
+    
+    // Windows에서 포트 사용 프로세스 찾기
+    exec(`netstat -ano | findstr :${port}`, (error: any, stdout: string) => {
+      if (error || !stdout) {
+        resolve(false);
+        return;
+      }
+      
+      const lines = stdout.split('\n');
+      let killedCount = 0;
+      let totalProcesses = 0;
+      
+      for (const line of lines) {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length >= 5) {
+          const pid = parts[4];
+          if (pid && pid !== '0' && !isNaN(parseInt(pid))) {
+            totalProcesses++;
+            exec(`taskkill /F /PID ${pid}`, (killError: any) => {
+              if (killError) {
+                log.error(`Failed to kill process ${pid}:`, killError);
+              } else {
+                log.info(`Successfully killed process ${pid}`);
+                killedCount++;
+              }
+              
+              // 모든 프로세스 처리 완료 후 resolve
+              if (killedCount + (totalProcesses - killedCount) >= totalProcesses) {
+                resolve(killedCount > 0);
+              }
+            });
+          }
+        }
+      }
+      
+      // 프로세스가 없는 경우
+      if (totalProcesses === 0) {
+        resolve(false);
+      }
+    });
+  });
+}
+
+// 사용 가능한 포트 찾기 함수
+async function findAvailablePort(startPort: number, maxAttempts: number = 10): Promise<number> {
+  for (let i = 0; i < maxAttempts; i++) {
+    const port = startPort + i;
+    const available = await isPortAvailable(port);
+    if (available) {
+      return port;
+    }
+  }
+  throw new Error(`No available ports found in range ${startPort}-${startPort + maxAttempts - 1}`);
+}
+
+// 서버 시작 함수 (개선됨)
+async function startServer(port: number): Promise<void> {
+  try {
+    // 포트 사용 가능 여부 확인
+    let available = await isPortAvailable(port);
+    
+    if (!available) {
+      log.warn(`Port ${port} is already in use. Attempting to kill existing process...`);
+      
+      // 기존 프로세스 종료 시도
+      const killed = await killProcessOnPort(port);
+      
+      if (killed) {
+        // 프로세스 종료 후 대기
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        
+        // 다시 포트 확인
+        available = await isPortAvailable(port);
+        
+        if (!available) {
+          log.warn(`Port ${port} is still in use after cleanup. Trying alternative port...`);
+          
+          // 대체 포트 찾기
+          try {
+            const alternativePort = await findAvailablePort(port + 1, 5);
+            log.info(`Using alternative port: ${alternativePort}`);
+            port = alternativePort;
+          } catch (error) {
+            log.error('Failed to find available port:', error);
+            process.exit(1);
+          }
+        }
+      } else {
+        // 프로세스 종료 실패 시 대체 포트 사용
+        try {
+          const alternativePort = await findAvailablePort(port + 1, 5);
+          log.info(`Using alternative port: ${alternativePort}`);
+          port = alternativePort;
+        } catch (error) {
+          log.error('Failed to find available port:', error);
+          process.exit(1);
+        }
+      }
+    }
+    
+    // 서버 시작
+    const server = app.listen(port, () => {
+      log.info(`MCP Server is running on port ${port}`);
+      
+      // 서버 시작 후 추가 초기화 대기
+      setTimeout(() => {
+        log.info('Server initialization completed and ready to accept requests');
+      }, 2000);
+    });
+    
+    // 서버 에러 핸들링
+    server.on('error', (error: any) => {
+      if (error.code === 'EADDRINUSE') {
+        log.error(`Port ${port} is still in use after cleanup attempt`);
+        process.exit(1);
+      } else {
+        log.error('Server error:', error);
+      }
+    });
+    
+    // Graceful shutdown
+    process.on('SIGINT', () => {
+      log.info('Shutting down server gracefully...');
+      server.close(() => {
+        log.info('Server closed');
+        process.exit(0);
+      });
+    });
+    
+    process.on('SIGTERM', () => {
+      log.info('Shutting down server gracefully...');
+      server.close(() => {
+        log.info('Server closed');
+        process.exit(0);
+      });
+    });
+    
+  } catch (error) {
+    log.error('Failed to start server:', error);
+    process.exit(1);
+  }
+}
 
 // MCP 엔드포인트
 app.post('/mcp', async (req, res) => {
@@ -85,14 +290,14 @@ app.post('/mcp', async (req, res) => {
     res.json(response);
     
   } catch (error) {
-    log.error('MCP endpoint error', error);
+    log.error('Error handling MCP message:', error);
     
     res.status(500).json({
       jsonrpc: '2.0',
       id: req.body?.id || null,
       error: {
         code: -32603,
-        message: 'Internal Error',
+        message: 'Internal error',
         data: error instanceof Error ? error.message : 'Unknown error'
       }
     });
@@ -125,47 +330,17 @@ app.use('*', (req, res) => {
   });
 });
 
-// 서버 시작
-function startServer(): void {
-  const server = app.listen(config.port, config.host, () => {
-    log.info(`MCP Server started on http://${config.host}:${config.port}`);
-    log.info(`Health check: http://${config.host}:${config.port}/health`);
-    log.info(`MCP endpoint: http://${config.host}:${config.port}/mcp`);
-    log.info(`Google Calendar API: http://${config.host}:${config.port}/api/calendar`);
-  });
-
-  // 서버 종료 처리
-  process.on('SIGINT', () => {
-    log.info('Shutting down MCP server...');
-    server.close(() => {
-      log.info('MCP server stopped');
-      process.exit(0);
-    });
-  });
-
-  process.on('SIGTERM', () => {
-    log.info('Shutting down MCP server...');
-    server.close(() => {
-      log.info('MCP server stopped');
-      process.exit(0);
-    });
-  });
-
-  // 예상치 못한 에러 처리
-  process.on('uncaughtException', (error) => {
-    log.error('Uncaught Exception', error);
+// 서버 초기화 및 시작
+async function main() {
+  try {
+    await initializeConnectors();
+    await startServer(config.port);
+  } catch (error) {
+    log.error('Failed to initialize server:', error);
     process.exit(1);
-  });
-
-  process.on('unhandledRejection', (reason, promise) => {
-    log.error('Unhandled Rejection at:', { promise, reason });
-    process.exit(1);
-  });
+  }
 }
 
-// 서버 시작 (모듈이 직접 실행된 경우)
-if (require.main === module) {
-  startServer();
-}
+main();
 
 export { app, startServer, config }; 
